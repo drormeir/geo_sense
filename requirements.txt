@@ -1,0 +1,8 @@
+numpy
+scipy
+tqdm
+matplotlib
+jupyter
+segyio
+PySide6
+
