@@ -1,0 +1,230 @@
+"""
+Session management for UAS framework.
+
+Handles save/load of application state to JSON files.
+"""
+
+from __future__ import annotations
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from PySide6.QtWidgets import QApplication
+
+from .factory import FactoryRegistry
+from .main_window import UASMainWindow
+
+
+def get_session_directory() -> Path:
+    """Get the directory for storing session files (platform-specific location)."""
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", Path.home()))
+    else:
+        base = Path.home() / ".config"
+    session_dir = base / "uas_sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+class SessionManager:
+    """Manages application session state and persistence.
+
+    Singleton pattern - use get_instance() to access the global session manager.
+    """
+
+    _instance: SessionManager | None = None
+
+    def __init__(self) -> None:
+        self._main_windows: list[UASMainWindow] = []
+        self._session_name: str = "default"
+        self._session_file: Path | None = None
+        self._auto_save_enabled: bool = True
+
+    @classmethod
+    def get_instance(cls) -> SessionManager:
+        """Get the global session manager instance (singleton pattern)."""
+        if cls._instance is None:
+            cls._instance = SessionManager()
+        return cls._instance
+
+    @classmethod
+    def reset(cls) -> None:
+        """Reset the session manager (mainly for testing)."""
+        cls._instance = None
+
+    @property
+    def main_windows(self) -> list[UASMainWindow]:
+        """Get all main windows in the session."""
+        return self._main_windows.copy()
+
+    @property
+    def session_name(self) -> str:
+        """Get the current session name."""
+        return self._session_name
+
+    @property
+    def auto_save_enabled(self) -> bool:
+        """Check if auto-save on last window close is enabled."""
+        return self._auto_save_enabled
+
+    @auto_save_enabled.setter
+    def auto_save_enabled(self, value: bool) -> None:
+        """Enable or disable auto-save on last window close."""
+        self._auto_save_enabled = value
+
+    def add_main_window(self, window: UASMainWindow) -> None:
+        """Add a main window to the session."""
+        if window not in self._main_windows:
+            self._main_windows.append(window)
+
+    def remove_main_window(self, window: UASMainWindow) -> None:
+        """Remove a main window from the session."""
+        if window in self._main_windows:
+            self._main_windows.remove(window)
+
+    def create_main_window_from_state(self, state: dict[str, Any]) -> UASMainWindow:
+        """Create a main window from serialized state using factory registry."""
+        registry = FactoryRegistry.get_instance()
+        cls = registry.get_main_window_class(state["type"])
+        window = cls.create(state)
+        self.add_main_window(window)
+        window.show()
+        return window
+
+    def serialize(self) -> dict[str, Any]:
+        """Serialize the entire session to a dict including all main windows."""
+        return {
+            "name": self._session_name,
+            "timestamp": datetime.now().isoformat(),
+            "main_windows": [w.serialize() for w in self._main_windows],
+        }
+
+    def deserialize(self, state: dict[str, Any]) -> None:
+        """Restore the session from a dict by closing existing windows and creating new ones."""
+        for window in self._main_windows[:]:
+            window.close()
+        self._main_windows.clear()
+
+        if "name" in state:
+            self._session_name = state["name"]
+
+        if "main_windows" in state:
+            for window_state in state["main_windows"]:
+                self.create_main_window_from_state(window_state)
+
+    def save(self, file_path: str | Path | None = None) -> Path:
+        """Save the session to a JSON file, returns the path used."""
+        if file_path is None:
+            file_path = get_session_directory() / f"{self._session_name}.json"
+        else:
+            file_path = Path(file_path)
+
+        self._session_file = file_path
+
+        state = self.serialize()
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+
+        return file_path
+
+    def load(self, file_path: str | Path) -> None:
+        """Load a session from a JSON file and restore all windows."""
+        file_path = Path(file_path)
+        self._session_file = file_path
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+
+        self.deserialize(state)
+
+    def new_session(self, name: str = "default") -> None:
+        """Start a new empty session by closing all windows and clearing state."""
+        for window in self._main_windows[:]:
+            window.close()
+        self._main_windows.clear()
+        self._session_name = name
+        self._session_file = None
+
+    def get_recent_sessions(self, max_count: int = 10) -> list[Path]:
+        """Get a list of recent session files sorted by modification time (newest first)."""
+        session_dir = get_session_directory()
+        sessions = list(session_dir.glob("*.json"))
+        sessions.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return sessions[:max_count]
+
+    def close_all(self, save: bool = True) -> None:
+        """Close all main windows and optionally save the session first."""
+        if save and self._main_windows:
+            self.save()
+
+        for window in self._main_windows[:]:
+            window.close()
+        self._main_windows.clear()
+
+
+class UASApplication:
+    """
+    Helper class for running a UAS application.
+    
+    Purpose:
+        Provides standard application lifecycle management including QApplication
+        setup, session loading/saving, and graceful shutdown.
+    
+    Flow:
+        1. Initializes QApplication with application name
+        2. Attempts to load recent session or specified session file
+        3. Falls back to creating default main window if no session found
+        4. Sets up auto-save on quit
+        5. Runs application event loop
+    """
+
+    def __init__(self, app_name: str = "UAS Application") -> None:
+        self._app_name = app_name
+        self._app: QApplication | None = None
+
+    def run(
+        self,
+        default_main_window_type: str | None = None,
+        session_file: str | Path | None = None,
+    ) -> int:
+        """Run the application, loading session or creating default window."""
+        import sys
+
+        self._app = QApplication(sys.argv)
+        self._app.setApplicationName(self._app_name)
+
+        session = SessionManager.get_instance()
+
+        if session_file:
+            try:
+                session.load(session_file)
+            except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+                print(f"Failed to load session: {e}")
+                if default_main_window_type:
+                    self._create_default_window(default_main_window_type)
+        else:
+            recent = session.get_recent_sessions(1)
+            if recent:
+                try:
+                    session.load(recent[0])
+                except (json.JSONDecodeError, KeyError) as e:
+                    print(f"Failed to load recent session: {e}")
+                    if default_main_window_type:
+                        self._create_default_window(default_main_window_type)
+            elif default_main_window_type:
+                self._create_default_window(default_main_window_type)
+
+        self._app.aboutToQuit.connect(lambda: session.close_all(save=False))
+
+        return self._app.exec()
+
+    def _create_default_window(self, type_name: str) -> None:
+        """Create a default main window using factory registry."""
+        session = SessionManager.get_instance()
+        registry = FactoryRegistry.get_instance()
+        cls = registry.get_main_window_class(type_name)
+        window = cls.create()
+        session.add_main_window(window)
+        window.show()
