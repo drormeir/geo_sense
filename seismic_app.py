@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QMenu,
-    QPushButton,
 )
+
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
 
@@ -55,6 +55,14 @@ class SeismicCanvas(FigureCanvasQTAgg):
         self._image = None
         self._colorbar_indicator: Line2D | None = None
 
+        # Metadata fields
+        self._trace_coords: np.ndarray | None = None
+        self._sample_interval: float = 1.0
+        self._sample_unit: str = "sample"
+        self._sample_min: float = 0.0
+        self._is_depth: bool = False
+        self._distance_unit: str = "trace"
+
         # Connect mouse motion event
         self.mpl_connect("motion_notify_event", self._on_mouse_move)
         self.mpl_connect("axes_leave_event", self._on_axes_leave)
@@ -74,37 +82,98 @@ class SeismicCanvas(FigureCanvasQTAgg):
         """Get the loaded filename."""
         return self._filename
 
-    def load_segy(self, filename: str) -> bool:
-        """Load and display a SEGY file. Returns True on success."""
-        try:
-            with segyio.open(filename, "r", ignore_geometry=True) as f:
-                self._data = f.trace.raw[:].T
-                self._filename = filename
-                percentile = np.percentile(np.abs(self._data), 95)
-                self._vmin = -percentile
-                self._vmax = percentile
-                self._render()
-                return True
-        except Exception as e:
-            QMessageBox.critical(None, "Error", f"Failed to load file:\n{str(e)}")
+    def load_file(self, filename: str, file_type: str) -> bool:
+        if file_type not in ['sgy', 'rd3', 'rd7']:
+            QMessageBox.critical(None, "Error", "Invalid file type")
             return False
 
-    def load_mala(self, filename: str) -> bool:
-        """Load and display a MALA rd3/rd7 file. Returns True on success."""
         try:
-            # readMALA expects filename without extension
-            file_base, _ = os.path.splitext(filename)
-            self._data, info = readMALA(file_base)
-            self._data = np.array(self._data)
+            if file_type == 'sgy':
+                with segyio.open(filename, "r", ignore_geometry=True) as f:
+                    self._data = f.trace.raw[:].T
+
+                    # Extract metadata from SEGY file
+                    # Sample interval from binary header (in microseconds)
+                    dt_us = f.bin[segyio.BinField.Interval]
+                    if dt_us > 0:
+                        self._sample_interval = dt_us / 1_000_000.0  # Convert to seconds
+                        self._sample_unit = "s"
+                    else:
+                        self._sample_interval = 1.0
+                        self._sample_unit = "sample"
+
+                    # Check if depth or time (assume time by default for SEGY)
+                    self._is_depth = False
+
+                    # Try to extract trace coordinates from trace headers
+                    try:
+                        num_traces = len(f.trace)
+                        coords = np.zeros((num_traces, 2))
+                        for i in range(num_traces):
+                            # CDP X and Y coordinates (scaled)
+                            x = f.header[i][segyio.TraceField.CDP_X]
+                            y = f.header[i][segyio.TraceField.CDP_Y]
+                            coords[i] = [x, y]
+
+                        # Only use coordinates if they're not all zeros
+                        if np.any(coords):
+                            self._trace_coords = coords
+                            self._distance_unit = "m"
+                        else:
+                            self._trace_coords = None
+                            self._distance_unit = "trace"
+                    except:
+                        self._trace_coords = None
+                        self._distance_unit = "trace"
+
+                    self._sample_min = 0.0
+
+            else:
+                file_base, _ = os.path.splitext(filename)
+                self._data, info = readMALA(file_base)
+                self._data = np.array(self._data)
+
+                # Extract metadata from MALA header
+                # Calculate sample interval (dt) from TIMEWINDOW and SAMPLES
+                timewindow = float(info.get('TIMEWINDOW', 0))
+                samples = int(info.get('SAMPLES', 1))
+                if timewindow > 0 and samples > 0:
+                    self._sample_interval = timewindow / samples
+                    self._sample_unit = "ns"
+                else:
+                    self._sample_interval = 1.0
+                    self._sample_unit = "sample"
+
+                # MALA is typically time-based (GPR data)
+                self._is_depth = False
+
+                # Distance interval from MALA header
+                distance_interval = float(info.get('DISTANCE INTERVAL', 0))
+                if distance_interval > 0:
+                    num_traces = self._data.shape[1]
+                    # Create linear coordinates based on distance interval
+                    distances = np.arange(num_traces) * distance_interval
+                    self._trace_coords = np.column_stack([distances, np.zeros(num_traces)])
+                    self._distance_unit = "m"
+                else:
+                    self._trace_coords = None
+                    self._distance_unit = "trace"
+
+                self._sample_min = 0.0
+
             self._filename = filename
             percentile = np.percentile(np.abs(self._data), 95)
             self._vmin = -percentile
             self._vmax = percentile
-            self._render()
-            return True
+            ret = True
         except Exception as e:
             QMessageBox.critical(None, "Error", f"Failed to load file:\n{str(e)}")
-            return False
+            ret = False
+
+        self._render()
+
+        return ret
+
 
     def _render(self) -> None:
         """Render the seismic data to the canvas."""
@@ -132,6 +201,7 @@ class SeismicCanvas(FigureCanvasQTAgg):
         self.figure.tight_layout()
         self.draw()
 
+
     def _on_mouse_move(self, event) -> None:
         """Handle mouse motion to show amplitude indicator on colorbar."""
         if (
@@ -156,9 +226,11 @@ class SeismicCanvas(FigureCanvasQTAgg):
         # Update colorbar indicator
         self._update_colorbar_indicator(amplitude)
 
+
     def _on_axes_leave(self, event) -> None:
         """Hide colorbar indicator when mouse leaves the axes."""
         self._hide_colorbar_indicator()
+
 
     def _get_inverted_color(self, amplitude: float) -> tuple[float, float, float]:
         """Get the inverted color for a given amplitude value."""
@@ -172,6 +244,7 @@ class SeismicCanvas(FigureCanvasQTAgg):
 
         # Invert RGB components
         return (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
+
 
     def _update_colorbar_indicator(self, amplitude: float) -> None:
         """Update the horizontal indicator line on the colorbar."""
@@ -194,6 +267,7 @@ class SeismicCanvas(FigureCanvasQTAgg):
         )
         self.draw_idle()
 
+
     def _hide_colorbar_indicator(self) -> None:
         """Hide the colorbar indicator line."""
         if self._colorbar_indicator is not None:
@@ -201,121 +275,99 @@ class SeismicCanvas(FigureCanvasQTAgg):
             self._colorbar_indicator = None
             self.draw_idle()
 
-    def set_color_scale(self, vmin: float, vmax: float) -> None:
-        """Set the color scale limits and re-render."""
-        self._vmin = vmin
-        self._vmax = vmax
-        self._render()
 
-    def save_segy(self, filename: str) -> tuple[bool, str]:
+    def get_hover_info(self, x: int, y: int) -> dict[str, Any] | None:
         """
-        Save current data to a SEGY file.
+        Calculate hover information for given pixel coordinates.
 
-        Returns: (success: bool, error_message: str)
-        """
-        if self._data is None:
-            return False, "No data to save"
+        Args:
+            x: Trace number (horizontal pixel coordinate)
+            y: Sample number (vertical pixel coordinate)
 
-        try:
-            # Create a minimal SEGY file with current data
-            spec = segyio.spec()
-            spec.samples = range(self._data.shape[0])
-            spec.tracecount = self._data.shape[1]
-            spec.format = 1  # 4-byte IBM float
-
-            with segyio.create(filename, spec) as f:
-                for i, trace in enumerate(self._data.T):
-                    f.trace[i] = trace
-
-            return True, ""
-        except Exception as e:
-            return False, str(e)
-
-    def save_mala_rd3(self, filename: str) -> tuple[bool, str]:
-        """
-        Save current data to a MALA rd3 file.
-
-        Returns: (success: bool, error_message: str)
+        Returns:
+            Dictionary with hover info, or None if out of bounds
         """
         if self._data is None:
-            return False, "No data to save"
+            return None
 
-        try:
-            # Save as rd3 (16-bit format)
-            file_base, _ = os.path.splitext(filename)
-            data_file = file_base + '.rd3'
+        # Check bounds
+        if not (0 <= y < self._data.shape[0] and 0 <= x < self._data.shape[1]):
+            return None
 
-            # Convert to int16 range
-            data_normalized = self._data / np.max(np.abs(self._data))
-            data_int16 = (data_normalized * 32767).astype(np.int16)
+        # Calculate absolute depth/time value: value = min + (sample * interval)
+        absolute_value = self._sample_min + (y * self._sample_interval)
 
-            # Save binary data
-            data_int16.T.tofile(data_file)
-
-            return True, ""
-        except Exception as e:
-            return False, str(e)
-
-    def save_mala_rd7(self, filename: str) -> tuple[bool, str]:
-        """
-        Save current data to a MALA rd7 file.
-
-        Returns: (success: bool, error_message: str)
-        """
-        if self._data is None:
-            return False, "No data to save"
-
-        try:
-            # Save as rd7 (32-bit format)
-            file_base, _ = os.path.splitext(filename)
-            data_file = file_base + '.rd7'
-
-            # Save as float32
-            data_float32 = self._data.astype(np.float32)
-            data_float32.T.tofile(data_file)
-
-            return True, ""
-        except Exception as e:
-            return False, str(e)
-
-    def get_state(self) -> dict[str, Any]:
-        """Get canvas state for serialization."""
-        return {
-            "filename": self._filename,
-            "vmin": float(self._vmin),
-            "vmax": float(self._vmax),
+        hover_info = {
+            'trace_number': x,
+            'sample_number': y,
+            'depth_time_value': absolute_value,
+            'depth_time_unit': self._sample_unit,
+            'is_depth': self._is_depth,  # True = depth, False = time
         }
 
-    def set_state(self, state: dict[str, Any]) -> None:
-        """Restore canvas state from serialization."""
-        if "filename" in state and state["filename"]:
-            self._vmin = state.get("vmin", 0.0)
-            self._vmax = state.get("vmax", 0.0)
-            # Load the file - this will use stored vmin/vmax after load
-            filename = state["filename"]
-            if os.path.exists(filename):
-                file_ext = os.path.splitext(filename)[1].lower()
-                try:
-                    if file_ext in ['.rd3', '.rd7']:
-                        # Load MALA file
-                        file_base, _ = os.path.splitext(filename)
-                        self._data, info = readMALA(file_base)
-                        self._data = np.array(self._data)
-                        self._filename = filename
-                    else:
-                        # Load SEGY file
-                        with segyio.open(filename, "r", ignore_geometry=True) as f:
-                            self._data = f.trace.raw[:].T
-                            self._filename = filename
+        # Calculate horizontal distance
+        if self._trace_coords is not None and x < len(self._trace_coords):
+            if x == 0:
+                horizontal_distance = 0.0
+            else:
+                # Calculate cumulative distance along the line
+                coord_current = self._trace_coords[x]
+                coord_prev = self._trace_coords[0]
+                horizontal_distance = np.sqrt(
+                    (coord_current[0] - coord_prev[0])**2 +
+                    (coord_current[1] - coord_prev[1])**2
+                )
+            hover_info['horizontal_distance'] = horizontal_distance
+        else:
+            hover_info['horizontal_distance'] = float(x)
 
-                    # Use stored vmin/vmax if available, otherwise compute
-                    if self._vmin == 0.0 and self._vmax == 0.0:
-                        percentile = np.percentile(np.abs(self._data), 95)
-                        self._vmin = -percentile
-                        self._vmax = percentile
-                    self._render()
-                except Exception:
-                    pass  # Silently fail on restore
+        hover_info['distance_unit'] = self._distance_unit
+
+        return hover_info
+
+
+    def save_file(self, filename: str, file_type: str) -> tuple[bool, str]:
+        """
+        Save current data to a file.
+
+        Returns: (success: bool, error_message: str)
+        """
+        if self._data is None:
+            return False, "No data to save"
+
+        if file_type not in ['sgy', 'rd3', 'rd7']:
+            return False, "Invalid file type"
+        
+        try:
+            if file_type == 'sgy':
+                # Create a minimal SEGY file with current data
+                spec = segyio.spec()
+                spec.samples = range(self._data.shape[0])
+                spec.tracecount = self._data.shape[1]
+                spec.format = 1  # 4-byte IBM float
+
+                with segyio.create(filename, spec) as f:
+                    for i, trace in enumerate(self._data.T):
+                        f.trace[i] = trace
+            else: # rd3 or rd7
+                file_base, _ = os.path.splitext(filename)
+                data_file = file_base + '.' + file_type
+
+                if file_type == 'rd3':
+                    data_normalized = self._data / np.max(np.abs(self._data))
+                    data_int16 = (data_normalized * 32767).astype(np.int16)
+
+                    # Save binary data
+                    data_int16.T.tofile(data_file)
+                else:
+                    data_float32 = self._data.astype(np.float32)
+                    data_float32.T.tofile(data_file)
+        except Exception as e:
+            return False, str(e)
+        finally:
+            return True, ""
+
+
 
 
 @auto_register
@@ -324,26 +376,29 @@ class SeismicSubWindow(UASSubWindow):
     Subwindow for displaying seismic SEGY data.
 
     Purpose:
-        Displays seismic data from SEGY files using matplotlib with a seismic
+        Displays seismic data from SEGY or MALA files using matplotlib with a seismic
         colormap. Supports color scale adjustment and session persistence.
 
     Flow:
         1. Initialize with empty canvas
-        2. Load SEGY file via load_file() method
+        2. Load SEGY or MALA file via load_file() method
         3. Data is displayed with seismic colormap
         4. State (filename, color scale) is serialized for session persistence
     """
 
     type_name = "seismic"
 
+
     def __init__(self, main_window: UASMainWindow, parent=None) -> None:
         self._canvas: SeismicCanvas | None = None
         super().__init__(main_window, parent)
+
 
     @property
     def canvas(self) -> SeismicCanvas:
         """Get the seismic canvas."""
         return self._canvas
+
 
     def on_create(self) -> None:
         """Set up the seismic display canvas."""
@@ -360,34 +415,70 @@ class SeismicSubWindow(UASSubWindow):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
+        # Connect canvas hover events to propagate to main window
+        self._canvas.mpl_connect("motion_notify_event", self._on_canvas_hover)
+        self._canvas.mpl_connect("axes_leave_event", self._on_canvas_leave)
+
+
+    def _on_canvas_hover(self, event) -> None:
+        """Handle canvas hover event and propagate to main window."""
+        if event.inaxes != self._canvas.axes or self._canvas.data is None:
+            return
+
+        # Get pixel coordinates
+        x, y = int(round(event.xdata)), int(round(event.ydata))
+
+        # Get hover info from canvas
+        hover_info = self._canvas.get_hover_info(x, y)
+
+        if hover_info and self._main_window:
+            # Propagate to main window
+            self._main_window.on_subwindow_hover(hover_info)
+
+
+    def _on_canvas_leave(self, event) -> None:
+        """Handle canvas leave event and clear status bar."""
+        if self._main_window:
+            self._main_window.on_subwindow_hover({})
+
+
     def load_file(self, filename: str) -> bool:
         """Load a seismic file (SEGY, rd3, or rd7) into this subwindow."""
+        if not filename or not os.path.exists(filename) or not os.path.isfile(filename):
+            QMessageBox.critical(self, "Error", "Invalid file")
+            return False
+        
         file_ext = os.path.splitext(filename)[1].lower()
 
-        success = False
         if file_ext in ['.rd3', '.rd7']:
-            success = self._canvas.load_mala(filename)
+            file_type = file_ext[1:]
         else:
-            success = self._canvas.load_segy(filename)
-
+            file_type = 'sgy'
+        success = self._canvas.load_file(filename, file_type)
         if success:
             self.title = os.path.basename(filename)
             self.update_status(f"Loaded: {filename}")
-            return True
-        return False
+        return success
+
 
     def serialize(self) -> dict[str, Any]:
         """Serialize subwindow state including loaded file and color scale."""
         state = super().serialize()
         if self._canvas:
-            state["canvas_state"] = self._canvas.get_state()
+            state["canvas_state"] = {
+                "filename": self._canvas.filename,
+            }
         return state
+
 
     def deserialize(self, state: dict[str, Any]) -> None:
         """Restore subwindow state including loaded file and color scale."""
         super().deserialize(state)
         if "canvas_state" in state and self._canvas:
-            self._canvas.set_state(state["canvas_state"])
+            canvas_state = state["canvas_state"]
+            filename = canvas_state.get("filename", "")
+            self.load_file(filename)
+
 
     def _show_save_error_dialog(self, error_msg: str, format_type: str) -> str:
         """
@@ -415,6 +506,7 @@ class SeismicSubWindow(UASSubWindow):
         else:
             return 'cancel'
 
+
     def _show_save_format_menu(self) -> None:
         """Show a menu to select save format."""
         menu = QMenu(self)
@@ -433,6 +525,7 @@ class SeismicSubWindow(UASSubWindow):
 
         # Show menu at cursor
         menu.exec(self.mapToGlobal(self.mapFromGlobal(self.cursor().pos())))
+
 
     def _show_context_menu(self, position) -> None:
         """Show context menu on right-click."""
@@ -476,8 +569,9 @@ class SeismicSubWindow(UASSubWindow):
             default_dir,
             "Seismic Files (*.sgy *.segy *.rd3 *.rd7);;SEGY Files (*.sgy *.segy);;MALA Files (*.rd3 *.rd7);;All Files (*)",
         )
-        if filename:
-            self.load_file(filename)
+        if not filename:
+            return
+        self.load_file(filename)
 
     def _save_segy(self) -> None:
         """Save current view as SEGY file with retry logic."""
@@ -499,7 +593,7 @@ class SeismicSubWindow(UASSubWindow):
                 return
 
             # Attempt to save
-            success, error_msg = self._canvas.save_segy(filename)
+            success, error_msg = self._canvas.save_file(filename, 'sgy')
 
             if success:
                 QMessageBox.information(self, "Success", f"Saved to {filename}")
@@ -538,7 +632,7 @@ class SeismicSubWindow(UASSubWindow):
                 return
 
             # Attempt to save
-            success, error_msg = self._canvas.save_mala_rd3(filename)
+            success, error_msg = self._canvas.save_file(filename, 'rd3')
 
             if success:
                 QMessageBox.information(self, "Success", f"Saved to {filename}")
@@ -577,7 +671,7 @@ class SeismicSubWindow(UASSubWindow):
                 return
 
             # Attempt to save
-            success, error_msg = self._canvas.save_mala_rd7(filename)
+            success, error_msg = self._canvas.save_file(filename, 'rd7')
 
             if success:
                 QMessageBox.information(self, "Success", f"Saved to {filename}")
@@ -694,6 +788,44 @@ class SeismicMainWindow(UASMainWindow):
     def _apply_agc(self) -> None:
         """Apply AGC to the active seismic subwindow (placeholder)."""
         QMessageBox.information(self, "AGC", "AGC function not yet implemented")
+
+    def on_subwindow_hover(self, hover_info: dict[str, Any]) -> None:
+        """
+        Update status bar with hover information from a subwindow.
+
+        Args:
+            hover_info: Dictionary containing hover data with keys:
+                - trace_number: int
+                - sample_number: int
+                - depth_time_value: float (absolute value including offset)
+                - horizontal_distance: float
+                - depth_time_unit: str ('s', 'ms', 'ns', 'm', etc.)
+                - distance_unit: str ('m', 'km', 'trace', etc.)
+                - is_depth: bool (True for depth, False for time)
+        """
+        if not hover_info:
+            self._status_bar.clearMessage()
+            return
+
+        # Format the status message
+        parts = []
+
+        if 'trace_number' in hover_info:
+            parts.append(f"Trace: {hover_info['trace_number']}")
+
+        if 'sample_number' in hover_info:
+            parts.append(f"Sample: {hover_info['sample_number']}")
+
+        if 'horizontal_distance' in hover_info and 'distance_unit' in hover_info:
+            parts.append(f"Distance: {hover_info['horizontal_distance']:.2f} {hover_info['distance_unit']}")
+
+        if 'depth_time_value' in hover_info and 'depth_time_unit' in hover_info:
+            is_depth = hover_info.get('is_depth', False)
+            label = "Depth" if is_depth else "Time"
+            parts.append(f"{label}: {hover_info['depth_time_value']:.3f} {hover_info['depth_time_unit']}")
+
+        status_message = " | ".join(parts)
+        self._status_bar.showMessage(status_message)
 
 
 def main() -> int:
