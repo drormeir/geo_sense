@@ -13,14 +13,18 @@ import os
 
 import numpy as np
 import segyio
+from gprpy.toolbox.gprIO_MALA import readMALA
 
 from PySide6.QtWidgets import (
     QVBoxLayout,
     QApplication,
     QFileDialog,
     QMessageBox,
+    QMenu,
+    QPushButton,
 )
 from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -81,6 +85,23 @@ class SeismicCanvas(FigureCanvasQTAgg):
                 self._vmax = percentile
                 self._render()
                 return True
+        except Exception as e:
+            QMessageBox.critical(None, "Error", f"Failed to load file:\n{str(e)}")
+            return False
+
+    def load_mala(self, filename: str) -> bool:
+        """Load and display a MALA rd3/rd7 file. Returns True on success."""
+        try:
+            # readMALA expects filename without extension
+            file_base, _ = os.path.splitext(filename)
+            self._data, info = readMALA(file_base)
+            self._data = np.array(self._data)
+            self._filename = filename
+            percentile = np.percentile(np.abs(self._data), 95)
+            self._vmin = -percentile
+            self._vmax = percentile
+            self._render()
+            return True
         except Exception as e:
             QMessageBox.critical(None, "Error", f"Failed to load file:\n{str(e)}")
             return False
@@ -186,6 +207,77 @@ class SeismicCanvas(FigureCanvasQTAgg):
         self._vmax = vmax
         self._render()
 
+    def save_segy(self, filename: str) -> tuple[bool, str]:
+        """
+        Save current data to a SEGY file.
+
+        Returns: (success: bool, error_message: str)
+        """
+        if self._data is None:
+            return False, "No data to save"
+
+        try:
+            # Create a minimal SEGY file with current data
+            spec = segyio.spec()
+            spec.samples = range(self._data.shape[0])
+            spec.tracecount = self._data.shape[1]
+            spec.format = 1  # 4-byte IBM float
+
+            with segyio.create(filename, spec) as f:
+                for i, trace in enumerate(self._data.T):
+                    f.trace[i] = trace
+
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    def save_mala_rd3(self, filename: str) -> tuple[bool, str]:
+        """
+        Save current data to a MALA rd3 file.
+
+        Returns: (success: bool, error_message: str)
+        """
+        if self._data is None:
+            return False, "No data to save"
+
+        try:
+            # Save as rd3 (16-bit format)
+            file_base, _ = os.path.splitext(filename)
+            data_file = file_base + '.rd3'
+
+            # Convert to int16 range
+            data_normalized = self._data / np.max(np.abs(self._data))
+            data_int16 = (data_normalized * 32767).astype(np.int16)
+
+            # Save binary data
+            data_int16.T.tofile(data_file)
+
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    def save_mala_rd7(self, filename: str) -> tuple[bool, str]:
+        """
+        Save current data to a MALA rd7 file.
+
+        Returns: (success: bool, error_message: str)
+        """
+        if self._data is None:
+            return False, "No data to save"
+
+        try:
+            # Save as rd7 (32-bit format)
+            file_base, _ = os.path.splitext(filename)
+            data_file = file_base + '.rd7'
+
+            # Save as float32
+            data_float32 = self._data.astype(np.float32)
+            data_float32.T.tofile(data_file)
+
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
     def get_state(self) -> dict[str, Any]:
         """Get canvas state for serialization."""
         return {
@@ -202,16 +294,26 @@ class SeismicCanvas(FigureCanvasQTAgg):
             # Load the file - this will use stored vmin/vmax after load
             filename = state["filename"]
             if os.path.exists(filename):
+                file_ext = os.path.splitext(filename)[1].lower()
                 try:
-                    with segyio.open(filename, "r", ignore_geometry=True) as f:
-                        self._data = f.trace.raw[:].T
+                    if file_ext in ['.rd3', '.rd7']:
+                        # Load MALA file
+                        file_base, _ = os.path.splitext(filename)
+                        self._data, info = readMALA(file_base)
+                        self._data = np.array(self._data)
                         self._filename = filename
-                        # Use stored vmin/vmax if available, otherwise compute
-                        if self._vmin == 0.0 and self._vmax == 0.0:
-                            percentile = np.percentile(np.abs(self._data), 95)
-                            self._vmin = -percentile
-                            self._vmax = percentile
-                        self._render()
+                    else:
+                        # Load SEGY file
+                        with segyio.open(filename, "r", ignore_geometry=True) as f:
+                            self._data = f.trace.raw[:].T
+                            self._filename = filename
+
+                    # Use stored vmin/vmax if available, otherwise compute
+                    if self._vmin == 0.0 and self._vmax == 0.0:
+                        percentile = np.percentile(np.abs(self._data), 95)
+                        self._vmin = -percentile
+                        self._vmax = percentile
+                    self._render()
                 except Exception:
                     pass  # Silently fail on restore
 
@@ -254,9 +356,21 @@ class SeismicSubWindow(UASSubWindow):
 
         self.setMinimumSize(400, 300)
 
+        # Enable context menu
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+
     def load_file(self, filename: str) -> bool:
-        """Load a SEGY file into this subwindow."""
-        if self._canvas.load_segy(filename):
+        """Load a seismic file (SEGY, rd3, or rd7) into this subwindow."""
+        file_ext = os.path.splitext(filename)[1].lower()
+
+        success = False
+        if file_ext in ['.rd3', '.rd7']:
+            success = self._canvas.load_mala(filename)
+        else:
+            success = self._canvas.load_segy(filename)
+
+        if success:
             self.title = os.path.basename(filename)
             self.update_status(f"Loaded: {filename}")
             return True
@@ -274,6 +388,213 @@ class SeismicSubWindow(UASSubWindow):
         super().deserialize(state)
         if "canvas_state" in state and self._canvas:
             self._canvas.set_state(state["canvas_state"])
+
+    def _show_save_error_dialog(self, error_msg: str, format_type: str) -> str:
+        """
+        Show error dialog with retry options.
+
+        Returns: 'retry', 'change_format', or 'cancel'
+        """
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setWindowTitle("Save Error")
+        msg_box.setText(f"Failed to save {format_type} file")
+        msg_box.setInformativeText(error_msg)
+
+        retry_btn = msg_box.addButton("Retry", QMessageBox.AcceptRole)
+        change_format_btn = msg_box.addButton("Save As Different Format", QMessageBox.ActionRole)
+        cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+
+        msg_box.exec_()
+
+        clicked = msg_box.clickedButton()
+        if clicked == retry_btn:
+            return 'retry'
+        elif clicked == change_format_btn:
+            return 'change_format'
+        else:
+            return 'cancel'
+
+    def _show_save_format_menu(self) -> None:
+        """Show a menu to select save format."""
+        menu = QMenu(self)
+
+        segy_action = QAction("SEGY Format", self)
+        segy_action.triggered.connect(self._save_segy)
+        menu.addAction(segy_action)
+
+        rd3_action = QAction("MALA rd3 Format", self)
+        rd3_action.triggered.connect(self._save_rd3)
+        menu.addAction(rd3_action)
+
+        rd7_action = QAction("MALA rd7 Format", self)
+        rd7_action.triggered.connect(self._save_rd7)
+        menu.addAction(rd7_action)
+
+        # Show menu at cursor
+        menu.exec(self.mapToGlobal(self.mapFromGlobal(self.cursor().pos())))
+
+    def _show_context_menu(self, position) -> None:
+        """Show context menu on right-click."""
+        context_menu = QMenu(self)
+
+        # Load action (single option for all formats)
+        load_action = QAction("Load...", self)
+        load_action.triggered.connect(self._load_file)
+        context_menu.addAction(load_action)
+
+        # Save submenu
+        save_menu = QMenu("Save as...", self)
+
+        save_segy_action = QAction("As SEGY File...", self)
+        save_segy_action.triggered.connect(self._save_segy)
+        save_menu.addAction(save_segy_action)
+
+        save_rd3_action = QAction("As MALA rd3 File...", self)
+        save_rd3_action.triggered.connect(self._save_rd3)
+        save_menu.addAction(save_rd3_action)
+
+        save_rd7_action = QAction("As MALA rd7 File...", self)
+        save_rd7_action.triggered.connect(self._save_rd7)
+        save_menu.addAction(save_rd7_action)
+
+        context_menu.addMenu(save_menu)
+
+        # Show menu at cursor position
+        context_menu.exec(self.mapToGlobal(position))
+
+    def _load_file(self) -> None:
+        """Load a seismic file (SEGY, rd3, or rd7)."""
+        # Use directory of current file as default, or empty string if no file loaded
+        default_dir = ""
+        if self._canvas.filename:
+            default_dir = os.path.dirname(self._canvas.filename)
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Seismic File",
+            default_dir,
+            "Seismic Files (*.sgy *.segy *.rd3 *.rd7);;SEGY Files (*.sgy *.segy);;MALA Files (*.rd3 *.rd7);;All Files (*)",
+        )
+        if filename:
+            self.load_file(filename)
+
+    def _save_segy(self) -> None:
+        """Save current view as SEGY file with retry logic."""
+        while True:
+            # Create default filename by concatenating current filename with .sgy
+            default_name = ""
+            if self._canvas.filename:
+                default_name = self._canvas.filename + ".sgy"
+
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save as SEGY File",
+                default_name,
+                "SEGY Files (*.sgy *.segy);;All Files (*)",
+            )
+
+            if not filename:
+                # User cancelled
+                return
+
+            # Attempt to save
+            success, error_msg = self._canvas.save_segy(filename)
+
+            if success:
+                QMessageBox.information(self, "Success", f"Saved to {filename}")
+                return
+
+            # Show error dialog with retry options
+            action = self._show_save_error_dialog(error_msg, "SEGY")
+
+            if action == 'retry':
+                continue  # Loop again to retry
+            elif action == 'change_format':
+                # Show save format menu
+                self._show_save_format_menu()
+                return
+            else:
+                # Cancel
+                return
+
+    def _save_rd3(self) -> None:
+        """Save current view as MALA rd3 file with retry logic."""
+        while True:
+            # Create default filename by concatenating current filename with .rd3
+            default_name = ""
+            if self._canvas.filename:
+                default_name = self._canvas.filename + ".rd3"
+
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save as MALA rd3 File",
+                default_name,
+                "MALA rd3 Files (*.rd3);;All Files (*)",
+            )
+
+            if not filename:
+                # User cancelled
+                return
+
+            # Attempt to save
+            success, error_msg = self._canvas.save_mala_rd3(filename)
+
+            if success:
+                QMessageBox.information(self, "Success", f"Saved to {filename}")
+                return
+
+            # Show error dialog with retry options
+            action = self._show_save_error_dialog(error_msg, "MALA rd3")
+
+            if action == 'retry':
+                continue  # Loop again to retry
+            elif action == 'change_format':
+                # Show save format menu
+                self._show_save_format_menu()
+                return
+            else:
+                # Cancel
+                return
+
+    def _save_rd7(self) -> None:
+        """Save current view as MALA rd7 file with retry logic."""
+        while True:
+            # Create default filename by concatenating current filename with .rd7
+            default_name = ""
+            if self._canvas.filename:
+                default_name = self._canvas.filename + ".rd7"
+
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save as MALA rd7 File",
+                default_name,
+                "MALA rd7 Files (*.rd7);;All Files (*)",
+            )
+
+            if not filename:
+                # User cancelled
+                return
+
+            # Attempt to save
+            success, error_msg = self._canvas.save_mala_rd7(filename)
+
+            if success:
+                QMessageBox.information(self, "Success", f"Saved to {filename}")
+                return
+
+            # Show error dialog with retry options
+            action = self._show_save_error_dialog(error_msg, "MALA rd7")
+
+            if action == 'retry':
+                continue  # Loop again to retry
+            elif action == 'change_format':
+                # Show save format menu
+                self._show_save_format_menu()
+                return
+            else:
+                # Cancel
+                return
 
 
 @auto_register
@@ -342,12 +663,12 @@ class SeismicMainWindow(UASMainWindow):
         toolbar.addAction("Open", self._open_segy_file)
 
     def _open_segy_file(self) -> None:
-        """Open a SEGY file and create a new seismic subwindow."""
+        """Open a seismic file (SEGY, rd3, or rd7) and create a new seismic subwindow."""
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "Open SEGY File",
+            "Open Seismic File",
             "",
-            "SEGY Files (*.sgy *.segy);;All Files (*)",
+            "Seismic Files (*.sgy *.segy *.rd3 *.rd7);;SEGY Files (*.sgy *.segy);;MALA Files (*.rd3 *.rd7);;All Files (*)",
         )
 
         if filename:
