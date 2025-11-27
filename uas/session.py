@@ -9,12 +9,14 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from PySide6.QtWidgets import QApplication
 
 from .factory import FactoryRegistry
-from .main_window import UASMainWindow
+
+if TYPE_CHECKING:
+    from .main_window import UASMainWindow
 
 
 def get_session_directory() -> Path:
