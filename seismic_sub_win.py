@@ -396,164 +396,86 @@ class SeismicSubWindow(UASSubWindow):
 
 
     def _save_segy(self) -> None:
-        """Save current view as SEGY file with retry logic."""
-        while True:
-            # Create default filename by concatenating current filename with .sgy
-            default_name = ""
-            if self.filename:
-                default_name = self.filename + ".sgy"
-
-            filename, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save as SEGY File",
-                default_name,
-                "SEGY Files (*.sgy *.segy);;All Files (*)",
-            )
-
-            if not filename:
-                # User cancelled
-                return
-
-            # Attempt to save
-            success, error_msg = self.save_file(filename, 'sgy')
-
-            if success:
-                QMessageBox.information(self, "Success", f"Saved to {filename}")
-                return
-
-            # Show error dialog with retry options
-            action = self._show_save_error_dialog(error_msg, "SEGY")
-
-            if action == 'retry':
-                continue  # Loop again to retry
-            elif action == 'change_format':
-                # Show save format menu
-                self._show_save_format_menu()
-                return
-            else:
-                # Cancel
-                return
-
+        self.save_file('sgy')
 
     def _save_rd3(self) -> None:
-        """Save current view as MALA rd3 file with retry logic."""
-        while True:
-            # Create default filename by concatenating current filename with .rd3
-            default_name = ""
-            if self.filename:
-                default_name = self.filename + ".rd3"
-
-            filename, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save as MALA rd3 File",
-                default_name,
-                "MALA rd3 Files (*.rd3);;All Files (*)",
-            )
-
-            if not filename:
-                # User cancelled
-                return
-
-            # Attempt to save
-            success, error_msg = self.save_file(filename, 'rd3')
-
-            if success:
-                QMessageBox.information(self, "Success", f"Saved to {filename}")
-                return
-
-            # Show error dialog with retry options
-            action = self._show_save_error_dialog(error_msg, "MALA rd3")
-
-            if action == 'retry':
-                continue  # Loop again to retry
-            elif action == 'change_format':
-                # Show save format menu
-                self._show_save_format_menu()
-                return
-            else:
-                # Cancel
-                return
+        self.save_file('rd3')
 
     def _save_rd7(self) -> None:
         """Save current view as MALA rd7 file with retry logic."""
+        self.save_file('rd7')
+
+
+    def save_file(self, file_type: str) -> None:
+        """
+        Save current data to a file.
+
+        """
+        if self._data is None:
+            QMessageBox.critical(self, "Error", "No data to save")
+            return
+
         while True:
-            # Create default filename by concatenating current filename with .rd7
+            # Create default filename by concatenating current filename with .file_type
             default_name = ""
             if self.filename:
-                default_name = self.filename + ".rd7"
+                default_name = self.filename + '.' + file_type
+            label = ''
+            filter = ''
+            if file_type == 'sgy':
+                label = 'SEGY'
+                filter = '(*.sgy *.segy)'
+            elif file_type == 'rd3':
+                label = 'MALA rd3'
+                filter = '(*.rd3)'
+            elif file_type == 'rd7':
+                label = 'MALA rd7'
+                filter = '(*.rd7)'
+            else:
+                QMessageBox.critical(self, "Error", "Invalid file type")
+                return
 
-            filename, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save as MALA rd7 File",
-                default_name,
-                "MALA rd7 Files (*.rd7);;All Files (*)",
-            )
-
+            filename, _ = QFileDialog.getSaveFileName(self, f"Save as {label} File", default_name, f"{label} Files ({filter});;All Files (*)")
             if not filename:
                 # User cancelled
                 return
 
-            # Attempt to save
-            success, error_msg = self.save_file(filename, 'rd7')
+            try:
+                if file_type == 'sgy':
+                    # Create a minimal SEGY file with current data
+                    spec = segyio.spec()
+                    spec.samples = range(self._data.shape[0])
+                    spec.tracecount = self._data.shape[1]
+                    spec.format = 1  # 4-byte IBM float
 
-            if success:
+                    with segyio.create(filename, spec) as f:
+                        for i, trace in enumerate(self._data.T):
+                            f.trace[i] = trace
+                else: # rd3 or rd7
+                    file_base, _ = os.path.splitext(filename)
+                    data_file = file_base + '.' + file_type
+
+                    if file_type == 'rd3':
+                        data_normalized = self._data / np.max(np.abs(self._data))
+                        data_int16 = (data_normalized * 32767).astype(np.int16)
+
+                        # Save binary data
+                        data_int16.T.tofile(data_file)
+                    else:
+                        data_float32 = self._data.astype(np.float32)
+                        data_float32.T.tofile(data_file)
                 QMessageBox.information(self, "Success", f"Saved to {filename}")
-                return
-
-            # Show error dialog with retry options
-            action = self._show_save_error_dialog(error_msg, "MALA rd7")
-
-            if action == 'retry':
-                continue  # Loop again to retry
-            elif action == 'change_format':
-                # Show save format menu
-                self._show_save_format_menu()
-                return
-            else:
-                # Cancel
-                return
-
-
-    def save_file(self, filename: str, file_type: str) -> tuple[bool, str]:
-        """
-        Save current data to a file.
-
-        Returns: (success: bool, error_message: str)
-        """
-        if self._data is None:
-            return False, "No data to save"
-
-        if file_type not in ['sgy', 'rd3', 'rd7']:
-            return False, "Invalid file type"
-        
-        try:
-            if file_type == 'sgy':
-                # Create a minimal SEGY file with current data
-                spec = segyio.spec()
-                spec.samples = range(self._data.shape[0])
-                spec.tracecount = self._data.shape[1]
-                spec.format = 1  # 4-byte IBM float
-
-                with segyio.create(filename, spec) as f:
-                    for i, trace in enumerate(self._data.T):
-                        f.trace[i] = trace
-            else: # rd3 or rd7
-                file_base, _ = os.path.splitext(filename)
-                data_file = file_base + '.' + file_type
-
-                if file_type == 'rd3':
-                    data_normalized = self._data / np.max(np.abs(self._data))
-                    data_int16 = (data_normalized * 32767).astype(np.int16)
-
-                    # Save binary data
-                    data_int16.T.tofile(data_file)
-                else:
-                    data_float32 = self._data.astype(np.float32)
-                    data_float32.T.tofile(data_file)
-        except Exception as e:
-            return False, str(e)
-        finally:
-            return True, ""
+                break
+            except Exception as e:
+                action = self._show_save_error_dialog(str(e), label)
+                if action == 'cancel':
+                    break
+                if action == 'change_format':
+                    # Show save format menu
+                    self._show_save_format_menu()
+            finally:
+                pass                
+        return
 
 
 
