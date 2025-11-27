@@ -16,16 +16,17 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QWidget,
     QStatusBar,
-    QMenu,
     QVBoxLayout,
     QToolBar,
     QDockWidget,
+    QApplication,
 )
 from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QAction, QCloseEvent
 
 from .subwindow import UASSubWindow
 from .factory import FactoryRegistry
+from .session import SessionManager
 
 
 class DisplayMode(Enum):
@@ -103,12 +104,14 @@ class UASMainWindow(QMainWindow):
         self.setWindowTitle("UAS Main Window")
         self.resize(1024, 768)
 
+
     @property
     def window_id(self) -> str:
         """Get the unique identifier for this main window."""
         return self._id
 
     type_name: str  # Class attribute: unique identifier for this main window type
+
 
     @classmethod
     def create(cls, state: dict[str, Any] | None = None) -> Self:
@@ -122,20 +125,24 @@ class UASMainWindow(QMainWindow):
             window.deserialize(state)
         return window
 
+
     @property
     def display_mode(self) -> DisplayMode:
         """Get the current display mode."""
         return self._display_mode
+
 
     @property
     def subwindows(self) -> list[UASSubWindow]:
         """Get all subwindows in this main window."""
         return self._subwindows.copy()
 
+
     @property
     def active_subwindow(self) -> UASSubWindow | None:
         """Get the currently active subwindow."""
         return self._active_subwindow
+
 
     def set_display_mode(self, mode: DisplayMode) -> None:
         """Switch to a different display mode, preserving subwindow states."""
@@ -162,6 +169,7 @@ class UASMainWindow(QMainWindow):
             if subwindow.subwindow_id == active_id:
                 self._set_active_subwindow(subwindow)
 
+
     def _setup_display_mode(self, mode: DisplayMode) -> None:
         """Set up the UI components (MDI area or tab widget) for a display mode."""
         if mode == DisplayMode.MDI:
@@ -177,6 +185,7 @@ class UASMainWindow(QMainWindow):
             self._tab_widget.currentChanged.connect(self._on_tab_changed)
             self._central_layout.addWidget(self._tab_widget)
 
+
     def _cleanup_display_mode(self) -> None:
         """Clean up UI components from current display mode before switching."""
         if self._mdi_area:
@@ -189,10 +198,12 @@ class UASMainWindow(QMainWindow):
             self._tab_widget = None
         self._subwindows.clear()
 
+
     def _setup_status_bar(self) -> None:
         """Set up the status bar for displaying messages from subwindows."""
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
+
 
     def _setup_menus(self) -> None:
         """Set up the menu bar with standard menus (override to customize)."""
@@ -214,12 +225,14 @@ class UASMainWindow(QMainWindow):
         clone_action.triggered.connect(self._clone_window)
         window_menu.addAction(clone_action)
 
+
     def _setup_shortcuts(self) -> None:
         """Set up default keyboard shortcuts (e.g., Ctrl+W to close subwindow)."""
         close_action = QAction("Close", self)
         close_action.setShortcut("Ctrl+W")
         close_action.triggered.connect(self._close_active_subwindow)
         self.addAction(close_action)
+
 
     def create_toolbar(
         self,
@@ -236,16 +249,20 @@ class UASMainWindow(QMainWindow):
         self._toolbars[name] = toolbar
         return toolbar
 
+
     def get_toolbar(self, name: str) -> QToolBar | None:
         """Get a toolbar by name."""
         return self._toolbars.get(name)
 
+
     def remove_toolbar(self, name: str) -> None:
         """Remove a toolbar by name."""
-        if name in self._toolbars:
-            toolbar = self._toolbars.pop(name)
-            self.removeToolBar(toolbar)
-            toolbar.deleteLater()
+        if not name or name not in self._toolbars:
+            return
+        toolbar = self._toolbars.pop(name)
+        self.removeToolBar(toolbar)
+        toolbar.deleteLater()
+
 
     def create_dock_widget(
         self,
@@ -266,37 +283,46 @@ class UASMainWindow(QMainWindow):
         self._dock_widgets[name] = dock
         return dock
 
+
     def get_dock_widget(self, name: str) -> QDockWidget | None:
         """Get a dock widget by name."""
         return self._dock_widgets.get(name)
 
+
     def remove_dock_widget(self, name: str) -> None:
         """Remove a dock widget by name."""
-        if name in self._dock_widgets:
-            dock = self._dock_widgets.pop(name)
-            self.removeDockWidget(dock)
-            dock.deleteLater()
+        if not name or name not in self._dock_widgets:
+            return
+        dock = self._dock_widgets.pop(name)
+        self.removeDockWidget(dock)
+        dock.deleteLater()
 
-    def add_subwindow(self, subwindow: UASSubWindow) -> None:
+
+    def add_subwindow(self, subwindow: UASSubWindow|None) -> None:
         """Add a subwindow to this main window and make it active."""
+        if subwindow is None:
+            return
         self._subwindows.append(subwindow)
         self._add_subwindow_to_display(subwindow)
         subwindow.status_message.connect(self._on_status_message)
         self._set_active_subwindow(subwindow)
 
+
     def remove_subwindow(self, subwindow: UASSubWindow) -> None:
         """Remove a subwindow from this main window."""
-        if subwindow in self._subwindows:
-            self._subwindows.remove(subwindow)
-            self._remove_subwindow_from_display(subwindow)
-            try:
-                subwindow.status_message.disconnect(self._on_status_message)
-            except (RuntimeError, TypeError):
-                pass  # Signal was not connected
-            if self._active_subwindow == subwindow:
-                self._active_subwindow = None
-                if self._subwindows:
-                    self._set_active_subwindow(self._subwindows[-1])
+        if not subwindow or not isinstance(subwindow, UASSubWindow) or subwindow not in self._subwindows:
+            return
+        self._subwindows.remove(subwindow)
+        self._remove_subwindow_from_display(subwindow)
+        try:
+            subwindow.status_message.disconnect(self._on_status_message)
+        except (RuntimeError, TypeError):
+            pass  # Signal was not connected
+        if self._active_subwindow == subwindow:
+            self._active_subwindow = None
+            if self._subwindows:
+                self._set_active_subwindow(self._subwindows[-1])
+        subwindow.close()
 
     def _add_subwindow_to_display(self, subwindow: UASSubWindow) -> None:
         """Add a subwindow to the current display mode container (MDI or tab widget)."""
@@ -317,6 +343,7 @@ class UASMainWindow(QMainWindow):
         elif self._display_mode == DisplayMode.TABBED and self._tab_widget:
             self._tab_widget.addTab(subwindow, subwindow.title)
 
+
     def _remove_subwindow_from_display(self, subwindow: UASSubWindow) -> None:
         """Remove a subwindow from the current display mode container."""
         if self._display_mode == DisplayMode.MDI and self._mdi_area:
@@ -330,17 +357,19 @@ class UASMainWindow(QMainWindow):
             if index >= 0:
                 self._tab_widget.removeTab(index)
 
+
     def _get_mdi_subwindow(self, subwindow: UASSubWindow) -> QMdiSubWindow | None:
         """Get the MDI subwindow container wrapper for a subwindow."""
-        if self._display_mode == DisplayMode.MDI and self._mdi_area:
-            for mdi_sub in self._mdi_area.subWindowList():
-                if mdi_sub.widget() == subwindow:
-                    return mdi_sub
-        return None
+        if self._display_mode != DisplayMode.MDI or self._mdi_area is None:
+            return None
+        for mdi_sub in self._mdi_area.subWindowList():
+            if mdi_sub.widget() == subwindow:
+                return mdi_sub
+
 
     def _set_active_subwindow(self, subwindow: UASSubWindow | None) -> None:
         """Set the active subwindow and call on_activate/on_deactivate callbacks."""
-        if self._active_subwindow == subwindow:
+        if subwindow is None or not isinstance(subwindow, UASSubWindow) or self._active_subwindow == subwindow:
             return
 
         if self._active_subwindow:
@@ -348,69 +377,70 @@ class UASMainWindow(QMainWindow):
 
         self._active_subwindow = subwindow
 
-        if subwindow:
-            subwindow.on_activate()
-            if self._display_mode == DisplayMode.MDI and self._mdi_area:
-                for mdi_sub in self._mdi_area.subWindowList():
-                    if mdi_sub.widget() == subwindow:
-                        self._mdi_area.setActiveSubWindow(mdi_sub)
-                        break
-            elif self._display_mode == DisplayMode.TABBED and self._tab_widget:
-                index = self._tab_widget.indexOf(subwindow)
-                if index >= 0:
-                    self._tab_widget.setCurrentIndex(index)
+        subwindow.on_activate()
+        if self._display_mode == DisplayMode.MDI and self._mdi_area:
+            for mdi_sub in self._mdi_area.subWindowList():
+                if mdi_sub.widget() == subwindow:
+                    self._mdi_area.setActiveSubWindow(mdi_sub)
+                    break
+        elif self._display_mode == DisplayMode.TABBED and self._tab_widget:
+            index = self._tab_widget.indexOf(subwindow)
+            if index >= 0:
+                self._tab_widget.setCurrentIndex(index)
+
 
     def _on_mdi_subwindow_activated(self, mdi_subwindow: QMdiSubWindow | None) -> None:
         """Handle MDI subwindow activation event from MDI area."""
-        if mdi_subwindow and mdi_subwindow.widget():
-            widget = mdi_subwindow.widget()
-            if isinstance(widget, UASSubWindow):
-                self._set_active_subwindow(widget)
+        if mdi_subwindow is None:
+            return
+        widget = mdi_subwindow.widget()
+        self._set_active_subwindow(widget)
+
 
     def _on_tab_changed(self, index: int) -> None:
         """Handle tab change event in tabbed mode."""
         if index >= 0 and self._tab_widget:
             widget = self._tab_widget.widget(index)
-            if isinstance(widget, UASSubWindow):
-                self._set_active_subwindow(widget)
+            self._set_active_subwindow(widget)
+
 
     def _on_tab_close_requested(self, index: int) -> None:
         """Handle tab close request from tabbed mode."""
-        if self._tab_widget:
-            widget = self._tab_widget.widget(index)
-            if isinstance(widget, UASSubWindow):
-                self.remove_subwindow(widget)
-                widget.close()
+        if not self._tab_widget or index < 0:
+            return
+        widget = self._tab_widget.widget(index)
+        self.remove_subwindow(widget)
+
 
     def _on_status_message(self, message: str) -> None:
         """Handle status message signal from a subwindow and display in status bar."""
         self._status_bar.showMessage(message, 5000)
 
+
     def _close_active_subwindow(self) -> None:
         """Close the currently active subwindow (triggered by Ctrl+W shortcut)."""
-        if self._active_subwindow:
-            self.remove_subwindow(self._active_subwindow)
-            self._active_subwindow.close()
+        self.remove_subwindow(self._active_subwindow)
+
 
     def _clone_window(self) -> None:
         """Clone this main window by serializing and creating a new window from state."""
-        from .session import SessionManager
-
         state = self.serialize()
         state["id"] = str(uuid.uuid4())
         session = SessionManager.get_instance()
         session.create_main_window_from_state(state)
 
+
     def _update_mdi_geometries(self) -> None:
         """Update stored MDI geometries from current MDI subwindows for persistence."""
-        if self._display_mode == DisplayMode.MDI and self._mdi_area:
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
+        if self._display_mode != DisplayMode.MDI and self._mdi_area:
+            return
+        QApplication.processEvents()
+        for sw in self._subwindows:
+            mdi_sub = self._get_mdi_subwindow(sw)
+            if mdi_sub is None:
+                continue
+            sw.mdi_geometry = mdi_sub.geometry()
 
-            for sw in self._subwindows:
-                mdi_sub = self._get_mdi_subwindow(sw)
-                if mdi_sub:
-                    sw.mdi_geometry = mdi_sub.geometry()
 
     def serialize(self) -> dict[str, Any]:
         """Serialize this main window's state to a dict (override to add custom state)."""
@@ -430,6 +460,7 @@ class UASMainWindow(QMainWindow):
             "subwindows": [sw.serialize() for sw in self._subwindows],
         }
 
+
     def deserialize(self, state: dict[str, Any]) -> None:
         """Restore this main window's state from a dict (override to restore custom state)."""
         if "id" in state:
@@ -439,8 +470,6 @@ class UASMainWindow(QMainWindow):
         if "geometry" in state:
             geo = state["geometry"]
             x, y, width, height = geo["x"], geo["y"], geo["width"], geo["height"]
-
-            from PySide6.QtWidgets import QApplication
             screen = QApplication.primaryScreen()
             if screen:
                 screen_rect = screen.availableGeometry()
@@ -463,9 +492,9 @@ class UASMainWindow(QMainWindow):
                 subwindow = cls.create(self, sw_state)
                 self.add_subwindow(subwindow)
 
+
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event, saving session if auto-save enabled and last window."""
-        from .session import SessionManager
         session = SessionManager.get_instance()
 
         is_last_window = len(session.main_windows) == 1 and self in session.main_windows
