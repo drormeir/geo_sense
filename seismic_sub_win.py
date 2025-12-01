@@ -2,13 +2,15 @@ import numpy as np
 import os
 from typing import Any
 
-from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu
+from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
+import matplotlib.image as plt_image
+from matplotlib.backend_bases import NavigationToolbar2
 from uas import UASSubWindow, UASMainWindow, auto_register
 
 import segyio
@@ -43,7 +45,7 @@ class SeismicSubWindow(UASSubWindow):
         self._amplitude_min: float = 0.0
         self._amplitude_max: float = 0.0
         self._colorbar: plt.Colorbar | None = None
-        self._image: plt.Image | None = None
+        self._image: plt_image.AxesImage | None = None
         self._colorbar_indicator: Line2D | None = None
 
         # Metadata fields
@@ -54,15 +56,25 @@ class SeismicSubWindow(UASSubWindow):
         self._is_depth: bool = False
         self._distance_unit: str = "trace"
 
+        # Zoom state
+        self._zoom_active: bool = False
+        self._zoom_id: int | None = None
+        self._press_event = None
+
         self.title = "Seismic View"
         self._fig = Figure(figsize=(10, 6))
         self._axes = self._fig.add_subplot(111)
 
         self._canvas = FigureCanvasQTAgg(self._fig)
 
+        # Create toolbar
+        self._toolbar = QToolBar("Seismic Toolbar", self)
+        self._setup_toolbar()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        layout.addWidget(self._toolbar)
         layout.addWidget(self._canvas)
 
         self.setMinimumSize(400, 300)
@@ -74,6 +86,151 @@ class SeismicSubWindow(UASSubWindow):
         # Connect canvas hover events to propagate to main window
         self._canvas.mpl_connect("axes_leave_event", self._axes_leave_event)
         self._canvas.mpl_connect("motion_notify_event", self._motion_notify_event)
+
+
+    def _setup_toolbar(self) -> None:
+        """Set up the toolbar with zoom toggle button."""
+        self._zoom_action = QAction("🔍 Zoom", self)
+        self._zoom_action.setCheckable(True)
+        self._zoom_action.setChecked(False)
+        self._zoom_action.setToolTip("Toggle zoom mode (Left-click drag to zoom in, Right-click to zoom out)")
+        self._zoom_action.toggled.connect(self._toggle_zoom)
+        self._toolbar.addAction(self._zoom_action)
+
+        # Make toolbar visible and set proper size
+        self._toolbar.setVisible(True)
+        self._toolbar.setMovable(False)
+
+        # Install event filter to catch right-clicks on toolbar
+        self._toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._toolbar.customContextMenuRequested.connect(self._show_zoom_context_menu)
+
+
+    def _show_zoom_context_menu(self, position) -> None:
+        """Show context menu for zoom tool with reset option."""
+        context_menu = QMenu(self)
+
+        # Zoom submenu
+        zoom_menu = QMenu("Zoom", self)
+
+        reset_zoom_action = QAction("Reset Zoom", self)
+        reset_zoom_action.triggered.connect(self._zoom_out)
+        zoom_menu.addAction(reset_zoom_action)
+
+        context_menu.addMenu(zoom_menu)
+
+        # Show menu at cursor position
+        context_menu.exec(self._toolbar.mapToGlobal(position))
+
+
+    def _toggle_zoom(self, checked: bool) -> None:
+        """Toggle zoom mode on/off."""
+        self._zoom_active = checked
+        if checked:
+            # Activate zoom mode
+            self._activate_zoom()
+        else:
+            # Deactivate zoom mode
+            self._deactivate_zoom()
+
+
+    def _activate_zoom(self) -> None:
+        """Activate zoom mode by connecting mouse events."""
+        self._zoom_id = self._canvas.mpl_connect('button_press_event', self._on_zoom_press)
+        self._canvas.setCursor(Qt.CrossCursor)
+
+
+    def _deactivate_zoom(self) -> None:
+        """Deactivate zoom mode by disconnecting mouse events."""
+        if self._zoom_id is not None:
+            self._canvas.mpl_disconnect(self._zoom_id)
+            self._zoom_id = None
+        self._canvas.unsetCursor()
+
+
+    def _on_zoom_press(self, event) -> None:
+        """Handle mouse press for zoom rectangle selection."""
+        if event.inaxes != self._axes:
+            return
+
+        if event.button == 1:  # Left click - start zoom rectangle
+            self._press_event = event
+            self._release_id = self._canvas.mpl_connect('button_release_event', self._on_zoom_release)
+            self._motion_id = self._canvas.mpl_connect('motion_notify_event', self._on_zoom_motion)
+            self._rect = None
+        elif event.button == 3:  # Right click - zoom out
+            self._zoom_out()
+
+
+    def _on_zoom_motion(self, event) -> None:
+        """Draw zoom rectangle during mouse drag."""
+        if self._press_event is None:
+            return
+
+        # Allow dragging outside axes but use last valid coordinates
+        if event.xdata is None or event.ydata is None:
+            return
+
+        # Remove old rectangle
+        if hasattr(self, '_rect') and self._rect is not None:
+            self._rect.remove()
+
+        # Draw new rectangle from corner to corner
+        x0, y0 = self._press_event.xdata, self._press_event.ydata
+        x1, y1 = event.xdata, event.ydata
+
+        # Rectangle spans from one corner to opposite corner
+        self._rect = self._axes.add_patch(
+            plt.Rectangle((min(x0, x1), min(y0, y1)),
+                         abs(x1 - x0), abs(y1 - y0),
+                         fill=False, edgecolor='red', linewidth=2, linestyle='--')
+        )
+        self._canvas.draw_idle()
+
+
+    def _on_zoom_release(self, event) -> None:
+        """Complete zoom rectangle selection and apply zoom."""
+        if self._press_event is None:
+            return
+
+        # Disconnect motion and release events
+        self._canvas.mpl_disconnect(self._release_id)
+        self._canvas.mpl_disconnect(self._motion_id)
+
+        # Get coordinates (use last valid position if released outside axes)
+        x0, y0 = self._press_event.xdata, self._press_event.ydata
+
+        # If released outside axes, use the rectangle's last position
+        if event.xdata is not None and event.ydata is not None:
+            x1, y1 = event.xdata, event.ydata
+        elif hasattr(self, '_rect') and self._rect is not None:
+            # Use last rectangle position
+            bbox = self._rect.get_bbox()
+            x1, y1 = bbox.x1, bbox.y1
+        else:
+            x1, y1 = x0, y0
+
+        # Remove rectangle - it disappears on mouse release
+        if hasattr(self, '_rect') and self._rect is not None:
+            self._rect.remove()
+            self._rect = None
+            self._canvas.draw_idle()
+
+        # Apply zoom if rectangle is large enough (at least a few pixels)
+        if abs(x1 - x0) > 1 and abs(y1 - y0) > 1:
+            self._axes.set_xlim(min(x0, x1), max(x0, x1))
+            self._axes.set_ylim(max(y0, y1), min(y0, y1))  # Inverted for image coordinates
+            self._canvas.draw_idle()
+
+        self._press_event = None
+
+
+    def _zoom_out(self) -> None:
+        """Zoom out to show full data extent."""
+        if self._data is not None:
+            self._axes.set_xlim(0, self._data.shape[1])
+            self._axes.set_ylim(self._data.shape[0], 0)  # Inverted for image coordinates
+            self._canvas.draw_idle()
 
 
     @staticmethod
@@ -133,13 +290,10 @@ class SeismicSubWindow(UASSubWindow):
 
 
     def _update_colorbar_indicator(self, amplitude: float|None) -> None:
-        # Remove old indicator
-        if self._colorbar_indicator is not None:
-            self._colorbar_indicator.remove()
-            self._colorbar_indicator = None
+        self.remove_colorbar_indicator()
 
         """Update the horizontal indicator line on the colorbar."""
-        if self._colorbar is not None and amplitude is not None:
+        if self._image is not None and self._colorbar is not None and amplitude is not None:
             norm_value = (amplitude - self._amplitude_min) / (self._amplitude_max - self._amplitude_min)
             norm_value = max(0.0, min(1.0, norm_value))  # Clamp to [0, 1]
             # Get the color from the colormap
@@ -151,6 +305,18 @@ class SeismicSubWindow(UASSubWindow):
             self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
         self._canvas.draw_idle()
 
+
+    def remove_colorbar_indicator(self) -> None:
+        if self._colorbar_indicator is None:
+            return
+        self._colorbar_indicator.remove()
+        self._colorbar_indicator = None
+
+    def remove_colorbar(self) -> None:
+        if self._colorbar is None:
+            return
+        self._colorbar.remove()
+        self._colorbar = None
 
     def get_hover_info(self, x: int, y: int) -> dict[str, Any] | None:
         """
@@ -241,6 +407,15 @@ class SeismicSubWindow(UASSubWindow):
 
         context_menu.addMenu(save_menu)
 
+        # Zoom submenu
+        zoom_menu = QMenu("Zoom", self)
+
+        reset_zoom_action = QAction("Reset Zoom", self)
+        reset_zoom_action.triggered.connect(self._zoom_out)
+        zoom_menu.addAction(reset_zoom_action)
+
+        context_menu.addMenu(zoom_menu)
+
         # Show menu at cursor position
         context_menu.exec(self.mapToGlobal(position))
 
@@ -322,7 +497,8 @@ class SeismicSubWindow(UASSubWindow):
                         else:
                             self._trace_coords = None
                             self._distance_unit = "trace"
-                    except:
+                    except Exception as e:
+                        print(f"Error extracting trace coordinates: {e}")
                         self._trace_coords = None
                         self._distance_unit = "trace"
 
@@ -368,6 +544,18 @@ class SeismicSubWindow(UASSubWindow):
             ret = True
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load file:\n{str(e)}")
+            self.remove_colorbar_indicator()
+            self.remove_colorbar()
+            self._trace_coords = None
+            self._distance_unit = "trace"
+            self._sample_interval = 1.0
+            self._sample_unit = "sample"
+            self._sample_min = 0.0
+            self._is_depth = False
+            self._amplitude_min = 0.0
+            self._amplitude_max = 0.0
+            self._image = None
+            self._filename = ""
             ret = False
 
         self.canvas_render()
@@ -378,11 +566,8 @@ class SeismicSubWindow(UASSubWindow):
         """Render the seismic data to the canvas."""
         if self._data is None:
             return
-
-        # Remove old colorbar if exists
-        if self._colorbar is not None:
-            self._colorbar.remove()
-            self._colorbar = None
+        self.remove_colorbar_indicator()
+        self.remove_colorbar()
 
         self._axes.clear()
         self._image = self._axes.imshow(self._data, aspect="auto", cmap="seismic", vmin=self._amplitude_min, vmax=self._amplitude_max)
@@ -473,9 +658,6 @@ class SeismicSubWindow(UASSubWindow):
                 if action == 'change_format':
                     # Show save format menu
                     self._show_save_format_menu()
-            finally:
-                pass                
-        return
 
 
 
