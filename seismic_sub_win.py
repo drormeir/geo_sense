@@ -2,7 +2,7 @@ import numpy as np
 import os
 from typing import Any
 
-from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar
+from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -15,6 +15,74 @@ from uas import UASSubWindow, UASMainWindow, auto_register
 
 import segyio
 from gprpy.toolbox.gprIO_MALA import readMALA
+
+
+class DisplaySettingsDialog(QDialog):
+    """
+    Dialog for configuring display axis settings for each border.
+    """
+
+    def __init__(self, parent=None, current_settings=None):
+        super().__init__(parent)
+        self.setWindowTitle("Display Settings")
+
+        # Default settings
+        if current_settings is None:
+            current_settings = {
+                'top': 'None',
+                'bottom': 'Distance',
+                'left': 'Sample',
+                'right': 'None'
+            }
+
+        # Create layout
+        layout = QVBoxLayout(self)
+
+        # Create form layout for border settings
+        form_layout = QFormLayout()
+
+        # Top and Bottom borders (horizontal)
+        horizontal_options = ["None", "Distance", "Trace sample"]
+
+        self.top_combo = QComboBox()
+        self.top_combo.addItems(horizontal_options)
+        self.top_combo.setCurrentText(current_settings.get('top', 'None'))
+        form_layout.addRow("Top border:", self.top_combo)
+
+        self.bottom_combo = QComboBox()
+        self.bottom_combo.addItems(horizontal_options)
+        self.bottom_combo.setCurrentText(current_settings.get('bottom', 'Distance'))
+        form_layout.addRow("Bottom border:", self.bottom_combo)
+
+        # Left and Right borders (vertical)
+        vertical_options = ["None", "Sample", "Time", "Depth"]
+
+        self.left_combo = QComboBox()
+        self.left_combo.addItems(vertical_options)
+        self.left_combo.setCurrentText(current_settings.get('left', 'Sample'))
+        form_layout.addRow("Left border:", self.left_combo)
+
+        self.right_combo = QComboBox()
+        self.right_combo.addItems(vertical_options)
+        self.right_combo.setCurrentText(current_settings.get('right', 'None'))
+        form_layout.addRow("Right border:", self.right_combo)
+
+        layout.addLayout(form_layout)
+
+        # Dialog buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def get_settings(self):
+        """Return the selected settings as a dictionary."""
+        return {
+            'top': self.top_combo.currentText(),
+            'bottom': self.bottom_combo.currentText(),
+            'left': self.left_combo.currentText(),
+            'right': self.right_combo.currentText()
+        }
 
 
 @auto_register
@@ -60,6 +128,20 @@ class SeismicSubWindow(UASSubWindow):
         self._zoom_active: bool = False
         self._zoom_id: int | None = None
         self._press_event = None
+        self._sticky_vertical_edges: bool = False
+        self._sticky_horizontal_edges: bool = False
+
+        # Display settings
+        self._display_settings = {
+            'top': 'None',
+            'bottom': 'Distance',
+            'left': 'Sample',
+            'right': 'None'
+        }
+
+        # Create shared zoom menu
+        self._zoom_menu = None
+        self._create_zoom_menu()
 
         self.title = "Seismic View"
         self._fig = Figure(figsize=(10, 6))
@@ -101,23 +183,51 @@ class SeismicSubWindow(UASSubWindow):
         self._toolbar.setVisible(True)
         self._toolbar.setMovable(False)
 
+        # Style the toolbar to make checked state more visible
+        self._toolbar.setStyleSheet("""
+            QToolBar QToolButton:checked {
+                border: 2px solid #0078d4;
+                background-color: transparent;
+            }
+        """)
+
         # Install event filter to catch right-clicks on toolbar
         self._toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
         self._toolbar.customContextMenuRequested.connect(self._show_zoom_context_menu)
+
+
+    def _create_zoom_menu(self) -> None:
+        """Create the shared zoom submenu."""
+        self._zoom_menu = QMenu("Zoom", self)
+
+        reset_zoom_action = QAction("Reset Zoom", self)
+        reset_zoom_action.triggered.connect(self._zoom_out)
+        self._zoom_menu.addAction(reset_zoom_action)
+
+        # Add separator
+        self._zoom_menu.addSeparator()
+
+        # Sticky Vertical Edges (checkable)
+        self._sticky_vertical_action = QAction("Sticky Vertical Edges", self)
+        self._sticky_vertical_action.setCheckable(True)
+        self._sticky_vertical_action.setChecked(self._sticky_vertical_edges)
+        self._sticky_vertical_action.toggled.connect(self._toggle_sticky_vertical)
+        self._zoom_menu.addAction(self._sticky_vertical_action)
+
+        # Sticky Horizontal Edges (checkable)
+        self._sticky_horizontal_action = QAction("Sticky Horizontal Edges", self)
+        self._sticky_horizontal_action.setCheckable(True)
+        self._sticky_horizontal_action.setChecked(self._sticky_horizontal_edges)
+        self._sticky_horizontal_action.toggled.connect(self._toggle_sticky_horizontal)
+        self._zoom_menu.addAction(self._sticky_horizontal_action)
 
 
     def _show_zoom_context_menu(self, position) -> None:
         """Show context menu for zoom tool with reset option."""
         context_menu = QMenu(self)
 
-        # Zoom submenu
-        zoom_menu = QMenu("Zoom", self)
-
-        reset_zoom_action = QAction("Reset Zoom", self)
-        reset_zoom_action.triggered.connect(self._zoom_out)
-        zoom_menu.addAction(reset_zoom_action)
-
-        context_menu.addMenu(zoom_menu)
+        # Add shared zoom submenu
+        context_menu.addMenu(self._zoom_menu)
 
         # Show menu at cursor position
         context_menu.exec(self._toolbar.mapToGlobal(position))
@@ -153,13 +263,12 @@ class SeismicSubWindow(UASSubWindow):
         if event.inaxes != self._axes:
             return
 
+        # Only handle left click for zoom
         if event.button == 1:  # Left click - start zoom rectangle
             self._press_event = event
             self._release_id = self._canvas.mpl_connect('button_release_event', self._on_zoom_release)
             self._motion_id = self._canvas.mpl_connect('motion_notify_event', self._on_zoom_motion)
             self._rect = None
-        elif event.button == 3:  # Right click - zoom out
-            self._zoom_out()
 
 
     def _on_zoom_motion(self, event) -> None:
@@ -231,6 +340,16 @@ class SeismicSubWindow(UASSubWindow):
             self._axes.set_xlim(0, self._data.shape[1])
             self._axes.set_ylim(self._data.shape[0], 0)  # Inverted for image coordinates
             self._canvas.draw_idle()
+
+
+    def _toggle_sticky_vertical(self, checked: bool) -> None:
+        """Toggle sticky vertical edges mode."""
+        self._sticky_vertical_edges = checked
+
+
+    def _toggle_sticky_horizontal(self, checked: bool) -> None:
+        """Toggle sticky horizontal edges mode."""
+        self._sticky_horizontal_edges = checked
 
 
     @staticmethod
@@ -372,12 +491,15 @@ class SeismicSubWindow(UASSubWindow):
         """Serialize subwindow state including loaded file and color scale."""
         state = super().serialize()
         state['filename'] = self._filename
+        state['display_settings'] = self._display_settings
         return state
 
 
     def deserialize(self, state: dict[str, Any]) -> None:
         """Restore subwindow state including loaded file and color scale."""
         super().deserialize(state)
+        if 'display_settings' in state:
+            self._display_settings = state['display_settings']
         self.load_file(state.get("filename", ""))
 
 
@@ -407,14 +529,13 @@ class SeismicSubWindow(UASSubWindow):
 
         context_menu.addMenu(save_menu)
 
-        # Zoom submenu
-        zoom_menu = QMenu("Zoom", self)
+        # Display Settings action
+        display_settings_action = QAction("Display Settings...", self)
+        display_settings_action.triggered.connect(self._show_display_settings)
+        context_menu.addAction(display_settings_action)
 
-        reset_zoom_action = QAction("Reset Zoom", self)
-        reset_zoom_action.triggered.connect(self._zoom_out)
-        zoom_menu.addAction(reset_zoom_action)
-
-        context_menu.addMenu(zoom_menu)
+        # Add shared zoom submenu
+        context_menu.addMenu(self._zoom_menu)
 
         # Show menu at cursor position
         context_menu.exec(self.mapToGlobal(position))
@@ -576,8 +697,106 @@ class SeismicSubWindow(UASSubWindow):
         self._axes.set_xlabel("Trace Number")
         self._axes.set_ylabel("Sample Number")
         self._axes.set_title(os.path.basename(self._filename))
+        self._apply_display_settings()
         self._fig.tight_layout()
         self._canvas.draw_idle()
+
+
+    def _show_display_settings(self) -> None:
+        """Show the display settings dialog and apply changes."""
+        dialog = DisplaySettingsDialog(self, self._display_settings)
+        if dialog.exec() == QDialog.Accepted:
+            self._display_settings = dialog.get_settings()
+            self._apply_display_settings()
+            self._canvas.draw_idle()
+
+
+    def _apply_display_settings(self) -> None:
+        """Apply the display settings to the axes."""
+        if self._data is None:
+            return
+
+        # Get current settings
+        top = self._display_settings.get('top', 'None')
+        bottom = self._display_settings.get('bottom', 'Distance')
+        left = self._display_settings.get('left', 'Sample')
+        right = self._display_settings.get('right', 'None')
+
+        # Apply top axis
+        if top == 'None':
+            self._axes.xaxis.set_tick_params(top=False, labeltop=False)
+        elif top == 'Distance':
+            self._axes.xaxis.set_tick_params(top=True, labeltop=True)
+            self._axes.set_xlabel("Distance" if self._distance_unit == "m" else "Trace Number", loc='left')
+        elif top == 'Trace sample':
+            self._axes.xaxis.set_tick_params(top=True, labeltop=True)
+            self._axes.set_xlabel("Trace Number", loc='left')
+
+        # Apply bottom axis
+        if bottom == 'None':
+            self._axes.xaxis.set_tick_params(bottom=False, labelbottom=False)
+        elif bottom == 'Distance':
+            self._axes.xaxis.set_tick_params(bottom=True, labelbottom=True)
+            self._axes.set_xlabel("Distance" if self._distance_unit == "m" else "Trace Number")
+        elif bottom == 'Trace sample':
+            self._axes.xaxis.set_tick_params(bottom=True, labelbottom=True)
+            self._axes.set_xlabel("Trace Number")
+
+        # Apply left axis
+        if left == 'None':
+            self._axes.yaxis.set_tick_params(left=False, labelleft=False)
+        elif left == 'Sample':
+            self._axes.yaxis.set_tick_params(left=True, labelleft=True)
+            self._axes.set_ylabel("Sample Number")
+        elif left == 'Time':
+            self._axes.yaxis.set_tick_params(left=True, labelleft=True)
+            if self._sample_unit != "sample":
+                # Create secondary axis for time values
+                num_samples = self._data.shape[0]
+                tick_positions = self._axes.get_yticks()
+                tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}"
+                             for pos in tick_positions if 0 <= pos < num_samples]
+                self._axes.set_yticklabels(tick_labels)
+                self._axes.set_ylabel(f"Time ({self._sample_unit})")
+            else:
+                self._axes.set_ylabel("Sample Number")
+        elif left == 'Depth':
+            self._axes.yaxis.set_tick_params(left=True, labelleft=True)
+            if self._is_depth and self._sample_unit != "sample":
+                # Create secondary axis for depth values
+                num_samples = self._data.shape[0]
+                tick_positions = self._axes.get_yticks()
+                tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}"
+                             for pos in tick_positions if 0 <= pos < num_samples]
+                self._axes.set_yticklabels(tick_labels)
+                self._axes.set_ylabel(f"Depth ({self._sample_unit})")
+            else:
+                self._axes.set_ylabel("Sample Number")
+
+        # Apply right axis
+        if right == 'None':
+            self._axes.yaxis.set_tick_params(right=False, labelright=False)
+        elif right == 'Sample':
+            self._axes.yaxis.set_tick_params(right=True, labelright=True)
+            # Use secondary y-axis for sample numbers on right
+            ax2 = self._axes.secondary_yaxis('right')
+            ax2.set_ylabel("Sample Number")
+        elif right == 'Time':
+            self._axes.yaxis.set_tick_params(right=True, labelright=True)
+            if self._sample_unit != "sample":
+                ax2 = self._axes.secondary_yaxis('right')
+                ax2.set_ylabel(f"Time ({self._sample_unit})")
+            else:
+                ax2 = self._axes.secondary_yaxis('right')
+                ax2.set_ylabel("Sample Number")
+        elif right == 'Depth':
+            self._axes.yaxis.set_tick_params(right=True, labelright=True)
+            if self._is_depth and self._sample_unit != "sample":
+                ax2 = self._axes.secondary_yaxis('right')
+                ax2.set_ylabel(f"Depth ({self._sample_unit})")
+            else:
+                ax2 = self._axes.secondary_yaxis('right')
+                ax2.set_ylabel("Sample Number")
 
 
     def _save_segy(self) -> None:
