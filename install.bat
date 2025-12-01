@@ -6,6 +6,14 @@ echo  GeoSense Installation Script for Windows
 echo ============================================
 echo.
 
+:: Pull latest changes from main branch
+echo Pulling latest changes from git...
+git pull origin main
+if errorlevel 1 (
+    echo WARNING: Failed to pull from git. Continuing with installation...
+)
+echo.
+
 :: Check if venv already exists
 if exist "venv_geo_sense" (
     echo Virtual environment 'venv_geo_sense' already exists.
@@ -67,19 +75,51 @@ if not exist "requirements.txt" (
     echo ERROR: requirements.txt not found in current directory.
     goto :deactivate
 )
+
 pip install -r requirements.txt
 if errorlevel 1 (
     echo ERROR: Failed to install requirements.
     goto :deactivate
 )
+
+echo.
+echo ============================================
+echo Installing GPRpy...
+echo ============================================
+echo.
+git clone https://github.com/drormeir/GPRPy.git
+if errorlevel 1 (
+    echo ERROR: Failed to clone GPRpy.
+    goto :deactivate
+)
+cd GPRPy
+pip install .
+if errorlevel 1 (
+    echo ERROR: Failed to install GPRpy.
+    cd ..
+    goto :deactivate
+)
+cd ..
+
+rmdir /s /q GPRPy
+if errorlevel 1 (
+    echo WARNING: Failed to remove GPRpy directory.
+)
+echo.
+echo GPRpy installed successfully.
+echo.
+
 echo.
 echo Requirements installed successfully.
+
+
 
 :deactivate
 :: Deactivate virtual environment
 echo.
 echo Deactivating virtual environment...
 call deactivate
+
 
 echo.
 echo ============================================
