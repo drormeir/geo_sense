@@ -1,6 +1,10 @@
 @echo off
 setlocal
 
+echo ============================================
+echo  GeoSense Debug Mode
+echo ============================================
+echo.
 :: Check if venv exists
 if not exist "venv_geo_sense" (
     echo ERROR: Virtual environment 'venv_geo_sense' not found.
@@ -8,7 +12,6 @@ if not exist "venv_geo_sense" (
     goto :end
 )
 
-:: Activate virtual environment
 call venv_geo_sense\Scripts\activate.bat
 
 python seismic_app.py
