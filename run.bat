@@ -11,11 +11,11 @@ if not exist "venv_geo_sense" (
 :: Activate virtual environment
 call venv_geo_sense\Scripts\activate.bat
 
-:: Run the application
-python seismic_app.py
+:: Run the application and exit immediately
+start "" pythonw seismic_app.py
 
-:: Deactivate virtual environment
-call deactivate
+:: Exit the batch file (command prompt will close)
+exit
 
 :end
 endlocal
