@@ -15,6 +15,7 @@ from uas import UASSubWindow, UASMainWindow, auto_register
 
 import segyio
 from gprpy.toolbox.gprIO_MALA import readMALA
+from gs_icon import create_gs_icon
 
 
 class DisplaySettingsDialog(QDialog):
@@ -168,6 +169,9 @@ class SeismicSubWindow(UASSubWindow):
         # Connect canvas hover events to propagate to main window
         self._canvas.mpl_connect("axes_leave_event", self._axes_leave_event)
         self._canvas.mpl_connect("motion_notify_event", self._motion_notify_event)
+
+        # Set custom window icon
+        self.setWindowIcon(create_gs_icon())
 
 
     def _setup_toolbar(self) -> None:
@@ -751,11 +755,13 @@ class SeismicSubWindow(UASSubWindow):
         elif left == 'Time':
             self._axes.yaxis.set_tick_params(left=True, labelleft=True)
             if self._sample_unit != "sample":
-                # Create secondary axis for time values
+                # Create labels for time values
                 num_samples = self._data.shape[0]
                 tick_positions = self._axes.get_yticks()
-                tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}"
-                             for pos in tick_positions if 0 <= pos < num_samples]
+                # Only keep valid tick positions and create matching labels
+                valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
+                tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}" for pos in valid_ticks]
+                self._axes.set_yticks(valid_ticks)
                 self._axes.set_yticklabels(tick_labels)
                 self._axes.set_ylabel(f"Time ({self._sample_unit})")
             else:
@@ -763,11 +769,13 @@ class SeismicSubWindow(UASSubWindow):
         elif left == 'Depth':
             self._axes.yaxis.set_tick_params(left=True, labelleft=True)
             if self._is_depth and self._sample_unit != "sample":
-                # Create secondary axis for depth values
+                # Create labels for depth values
                 num_samples = self._data.shape[0]
                 tick_positions = self._axes.get_yticks()
-                tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}"
-                             for pos in tick_positions if 0 <= pos < num_samples]
+                # Only keep valid tick positions and create matching labels
+                valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
+                tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}" for pos in valid_ticks]
+                self._axes.set_yticks(valid_ticks)
                 self._axes.set_yticklabels(tick_labels)
                 self._axes.set_ylabel(f"Depth ({self._sample_unit})")
             else:

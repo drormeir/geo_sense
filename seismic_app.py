@@ -25,7 +25,7 @@ from uas import (
     SessionManager,
 )
 
-
+from gs_icon import create_gs_icon
 from seismic_sub_win import SeismicSubWindow
 
 
@@ -49,6 +49,7 @@ class SeismicMainWindow(UASMainWindow):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Seismic Viewer")
+        self.setWindowIcon(create_gs_icon())
 
     def _setup_menus(self) -> None:
         """Set up the menu bar with File menu and seismic-specific actions."""
