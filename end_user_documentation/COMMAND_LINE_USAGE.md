@@ -35,13 +35,19 @@ python seismic_app.py
 python seismic_app.py --no-session
 ```
 
-### Testing Options
+### Debugging & Testing Options
 ```bash
 # Auto-exit after 3 seconds (useful for automated tests)
 python seismic_app.py --auto-exit 3
 
 # Quick startup test (no session, auto-exit)
 python seismic_app.py --auto-exit 2 --no-session
+
+# Take a screenshot after startup for debugging
+python seismic_app.py --screenshot /tmp/screenshot.png --auto-exit 2
+
+# Print session file location and contents
+python seismic_app.py --print-session
 
 # Test mode (reserved for future use)
 python seismic_app.py --test-mode
@@ -57,6 +63,8 @@ python seismic_app.py --test-mode
 | `--test-mode` | - | Run in test mode (minimal GUI) |
 | `--auto-exit SECONDS` | - | Exit automatically after N seconds |
 | `--no-session` | - | Don't load or save session state |
+| `--screenshot PATH` | - | Save screenshot to PATH after startup |
+| `--print-session` | - | Print session file path and contents, then exit |
 
 ---
 
@@ -73,6 +81,12 @@ python seismic_app.py --no-session
 # Verify application starts and exits cleanly
 python seismic_app.py --auto-exit 2 --no-session
 echo $?  # Check exit code (0 = success)
+
+# Take a screenshot for visual verification
+python seismic_app.py --screenshot /tmp/app_test.png --auto-exit 2 --no-session
+
+# Check session file contents
+python seismic_app.py --print-session
 ```
 
 ### Windows Batch File
