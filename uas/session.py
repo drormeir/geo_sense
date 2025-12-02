@@ -9,7 +9,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Protocol
 
 from PySide6.QtWidgets import QApplication
 
@@ -18,6 +18,17 @@ from .factory import FactoryRegistry
 if TYPE_CHECKING:
     from .main_window import UASMainWindow
 
+
+class SerializablePlugin(Protocol):
+    """Protocol for objects that can be serialized/deserialized with sessions."""
+
+    def serialize(self) -> dict[str, Any]:
+        """Serialize the plugin state to a dictionary."""
+        ...
+
+    def deserialize(self, state: dict[str, Any]) -> None:
+        """Restore the plugin state from a dictionary."""
+        ...
 
 def get_session_directory() -> Path:
     """Get the directory for storing session files (platform-specific location)."""
@@ -43,6 +54,7 @@ class SessionManager:
         self._session_name: str = "default"
         self._session_file: Path | None = None
         self._auto_save_enabled: bool = True
+        self._plugins: dict[str, SerializablePlugin] = {}
 
     @classmethod
     def get_instance(cls) -> SessionManager:
@@ -86,6 +98,15 @@ class SessionManager:
         if window in self._main_windows:
             self._main_windows.remove(window)
 
+    def register_plugin(self, name: str, plugin: SerializablePlugin) -> None:
+        """Register a plugin for session serialization."""
+        self._plugins[name] = plugin
+
+    def unregister_plugin(self, name: str) -> None:
+        """Unregister a plugin from session serialization."""
+        if name in self._plugins:
+            del self._plugins[name]
+
     def create_main_window_from_state(self, state: dict[str, Any]) -> UASMainWindow:
         """Create a main window from serialized state using factory registry."""
         registry = FactoryRegistry.get_instance()
@@ -96,12 +117,18 @@ class SessionManager:
         return window
 
     def serialize(self) -> dict[str, Any]:
-        """Serialize the entire session to a dict including all main windows."""
-        return {
+        """Serialize the entire session to a dict including all main windows and plugins."""
+        session_dict = {
             "name": self._session_name,
             "timestamp": datetime.now().isoformat(),
             "main_windows": [w.serialize() for w in self._main_windows],
         }
+
+        # Serialize all registered plugins
+        for name, plugin in self._plugins.items():
+            session_dict["plugins"][name] = plugin.serialize()
+
+        return session_dict
 
     def deserialize(self, state: dict[str, Any]) -> None:
         """Restore the session from a dict by closing existing windows and creating new ones."""
@@ -111,6 +138,11 @@ class SessionManager:
 
         if "name" in state:
             self._session_name = state["name"]
+
+        # Deserialize all registered plugins
+        for name, plugin_state in state.get("plugins", {}).items():
+            if name in self._plugins:
+                self._plugins[name].deserialize(plugin_state)
 
         if "main_windows" in state:
             for window_state in state["main_windows"]:
