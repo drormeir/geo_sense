@@ -2,7 +2,7 @@ import numpy as np
 import os
 from typing import Any
 
-from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox
+from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox, QCheckBox
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -11,11 +11,13 @@ from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
 from matplotlib.backend_bases import NavigationToolbar2
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from uas import UASSubWindow, UASMainWindow, auto_register
 
 import segyio
 from gprpy.toolbox.gprIO_MALA import readMALA
 from gs_icon import create_gs_icon
+from global_settings import GlobalSettings
 
 
 class DisplaySettingsDialog(QDialog):
@@ -33,7 +35,9 @@ class DisplaySettingsDialog(QDialog):
                 'top': 'None',
                 'bottom': 'Distance',
                 'left': 'Sample',
-                'right': 'None'
+                'right': 'None',
+                'colormap': 'seismic',
+                'flip_colormap': False
             }
 
         # Create layout
@@ -70,6 +74,25 @@ class DisplaySettingsDialog(QDialog):
 
         layout.addLayout(form_layout)
 
+        # Colormap selection
+        colormap_group = QGroupBox("Colormap")
+        colormap_layout = QFormLayout()
+
+        # Common colormaps
+        colormap_options = ["seismic", "gray", "viridis", "plasma", "RdBu", "hot", "coolwarm", "jet"]
+        self.colormap_combo = QComboBox()
+        self.colormap_combo.addItems(colormap_options)
+        self.colormap_combo.setCurrentText(current_settings.get('colormap', 'seismic'))
+        colormap_layout.addRow("Color scheme:", self.colormap_combo)
+
+        # Flip colormap checkbox
+        self.flip_colormap_checkbox = QCheckBox("Flip colormap")
+        self.flip_colormap_checkbox.setChecked(current_settings.get('flip_colormap', False))
+        colormap_layout.addRow("", self.flip_colormap_checkbox)
+
+        colormap_group.setLayout(colormap_layout)
+        layout.addWidget(colormap_group)
+
         # Dialog buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -82,7 +105,9 @@ class DisplaySettingsDialog(QDialog):
             'top': self.top_combo.currentText(),
             'bottom': self.bottom_combo.currentText(),
             'left': self.left_combo.currentText(),
-            'right': self.right_combo.currentText()
+            'right': self.right_combo.currentText(),
+            'colormap': self.colormap_combo.currentText(),
+            'flip_colormap': self.flip_colormap_checkbox.isChecked()
         }
 
 
@@ -137,7 +162,9 @@ class SeismicSubWindow(UASSubWindow):
             'top': 'None',
             'bottom': 'Distance',
             'left': 'Sample',
-            'right': 'None'
+            'right': 'None',
+            'colormap': 'seismic',
+            'flip_colormap': False
         }
 
         # Create shared zoom menu
@@ -172,6 +199,12 @@ class SeismicSubWindow(UASSubWindow):
 
         # Set custom window icon
         self.setWindowIcon(create_gs_icon())
+
+        # Connect resize event to update layout
+        self._canvas.mpl_connect('resize_event', self._on_resize)
+
+        # Register as listener for global settings changes
+        GlobalSettings.add_listener(self._on_global_settings_changed)
 
 
     def _setup_toolbar(self) -> None:
@@ -417,15 +450,19 @@ class SeismicSubWindow(UASSubWindow):
 
         """Update the horizontal indicator line on the colorbar."""
         if self._image is not None and self._colorbar is not None and amplitude is not None:
-            norm_value = (amplitude - self._amplitude_min) / (self._amplitude_max - self._amplitude_min)
-            norm_value = max(0.0, min(1.0, norm_value))  # Clamp to [0, 1]
-            # Get the color from the colormap
-            cmap = self._image.get_cmap()
-            rgba = cmap(norm_value)
-            # Get inverted color for visibility
-            inv_color = (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
-            # Draw new indicator line spanning the colorbar width
-            self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
+            try:
+                norm_value = (amplitude - self._amplitude_min) / (self._amplitude_max - self._amplitude_min)
+                norm_value = max(0.0, min(1.0, norm_value))  # Clamp to [0, 1]
+                # Get the color from the colormap
+                cmap = self._image.get_cmap()
+                rgba = cmap(norm_value)
+                # Get inverted color for visibility
+                inv_color = (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
+                # Draw new indicator line spanning the colorbar width
+                self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
+            except (np.linalg.LinAlgError, ValueError):
+                # Colorbar axis not yet properly initialized, skip indicator
+                pass
         self._canvas.draw_idle()
 
 
@@ -695,24 +732,109 @@ class SeismicSubWindow(UASSubWindow):
         self.remove_colorbar()
 
         self._axes.clear()
-        self._image = self._axes.imshow(self._data, aspect="auto", cmap="seismic", vmin=self._amplitude_min, vmax=self._amplitude_max)
-        self._colorbar = self._fig.colorbar(self._image, ax=self._axes, label="Amplitude")
+
+        # Get colormap from display settings
+        colormap = self._display_settings.get('colormap', 'seismic')
+        flip_colormap = self._display_settings.get('flip_colormap', False)
+
+        # Add '_r' suffix to flip the colormap
+        if flip_colormap:
+            colormap = colormap + '_r'
+
+        self._image = self._axes.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
+
+        # Create a dedicated axis for the colorbar positioned after the right axis
+        # Get settings to calculate colorbar position
+        right_axis_visible = self._display_settings.get('right', 'None') != 'None'
+
+        # Calculate colorbar width as a fraction of the total figure width
+        width_px = self._fig.get_figwidth() * self._fig.dpi
+        colorbar_width_fraction = GlobalSettings.get_right_margin_colorbar_px() / width_px
+
+        # Calculate pad (space between axes and colorbar) based on right axis visibility
+        if right_axis_visible:
+            # If right axis is visible, position colorbar after it
+            pad_px = GlobalSettings.get_right_margin_image_axis_px()
+        else:
+            # If no right axis, minimal padding
+            pad_px = 10
+
+        pad_fraction = pad_px / width_px
+
+        # Create colorbar with calculated positioning
+        divider = make_axes_locatable(self._axes)
+        cax = divider.append_axes("right", size=f"{colorbar_width_fraction*100}%", pad=pad_fraction)
+        self._colorbar = self._fig.colorbar(self._image, cax=cax, label="Amplitude")
+
         self._colorbar_indicator = None  # Reset indicator on re-render
         self._axes.set_xlabel("Trace Number")
         self._axes.set_ylabel("Sample Number")
         self._axes.set_title(os.path.basename(self._filename))
         self._apply_display_settings()
-        self._fig.tight_layout()
+        self._adjust_layout_with_fixed_margins()
+
+        # Force canvas draw to initialize colorbar axis transforms
+        self._canvas.draw()
         self._canvas.draw_idle()
+
+
+    def _on_resize(self, event) -> None:
+        """Handle canvas resize event to maintain fixed pixel margins."""
+        if self._data is not None:
+            self._adjust_layout_with_fixed_margins()
+
+
+    def _adjust_layout_with_fixed_margins(self) -> None:
+        """Adjust figure layout with fixed pixel margins from global settings."""
+        # Get margins from global settings
+        left_margin_px = GlobalSettings.get_left_margin_px()
+        right_margin_px = GlobalSettings.get_total_right_margin()
+        top_margin_px = GlobalSettings.get_top_margin_px()
+        bottom_margin_px = GlobalSettings.get_bottom_margin_px()
+
+        # Get figure size in pixels
+        width_px = self._fig.get_figwidth() * self._fig.dpi
+        height_px = self._fig.get_figheight() * self._fig.dpi
+
+        # Convert pixels to proportions
+        left = left_margin_px / width_px
+        right = 1.0 - (right_margin_px / width_px)
+        bottom = bottom_margin_px / height_px
+        top = 1.0 - (top_margin_px / height_px)
+
+        # Apply the margins
+        self._fig.subplots_adjust(left=left, right=right, top=top, bottom=bottom)
+
+
+    def _on_global_settings_changed(self) -> None:
+        """Callback when global settings change - update the layout."""
+        if self._data is not None:
+            self._adjust_layout_with_fixed_margins()
+            self._canvas.draw_idle()
+
+    def closeEvent(self, event) -> None:
+        """Handle window close event - unregister from global settings."""
+        GlobalSettings.remove_listener(self._on_global_settings_changed)
+        super().closeEvent(event)
 
 
     def _show_display_settings(self) -> None:
         """Show the display settings dialog and apply changes."""
         dialog = DisplaySettingsDialog(self, self._display_settings)
         if dialog.exec() == QDialog.Accepted:
+            old_colormap = self._display_settings.get('colormap', 'seismic')
+            old_flip = self._display_settings.get('flip_colormap', False)
             self._display_settings = dialog.get_settings()
-            self._apply_display_settings()
-            self._canvas.draw_idle()
+            new_colormap = self._display_settings.get('colormap', 'seismic')
+            new_flip = self._display_settings.get('flip_colormap', False)
+
+            # If colormap or flip changed, re-render the entire canvas
+            if old_colormap != new_colormap or old_flip != new_flip:
+                self.canvas_render()
+            else:
+                # Otherwise just update axis settings
+                self._apply_display_settings()
+                self._canvas.draw_idle()
 
 
     def _apply_display_settings(self) -> None:

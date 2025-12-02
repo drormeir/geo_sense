@@ -10,11 +10,7 @@ Run with: python seismic_app.py
 from typing import Any
 import sys
 
-from PySide6.QtWidgets import (
-    QApplication,
-    QMessageBox,
-)
-
+from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QAction
 
 
@@ -27,6 +23,7 @@ from uas import (
 
 from gs_icon import create_gs_icon
 from seismic_sub_win import SeismicSubWindow
+from global_settings import GlobalSettings
 
 
 @auto_register
@@ -87,6 +84,10 @@ class SeismicMainWindow(UASMainWindow):
         agc_action.triggered.connect(self._apply_agc)
         tools_menu.addAction(agc_action)
 
+        # Settings menu
+        settings_menu = menubar.addMenu("&Settings")
+        GlobalSettings.create_action(settings_menu, parent=self)
+
         # Setup toolbar
         self._setup_toolbar()
 
@@ -118,7 +119,6 @@ class SeismicMainWindow(UASMainWindow):
     def _apply_agc(self) -> None:
         """Apply AGC to the active seismic subwindow (placeholder)."""
         QMessageBox.information(self, "AGC", "AGC function not yet implemented")
-
 
     def on_subwindow_hover(self, hover_info: dict[str, Any]) -> None:
         """
@@ -163,6 +163,10 @@ class SeismicMainWindow(UASMainWindow):
 def main() -> int:
     """Run the Seismic Viewer application."""
     app = UASApplication("Seismic Viewer")
+
+    # Register global settings for session persistence
+    GlobalSettings.register()
+
     return app.run(default_main_window_type="seismic_main")
 
 
