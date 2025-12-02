@@ -7,6 +7,7 @@ Handles save/load of application state to JSON files.
 from __future__ import annotations
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TYPE_CHECKING, Protocol
@@ -220,32 +221,43 @@ class UASApplication:
         self,
         default_main_window_type: str | None = None,
         session_file: str | Path | None = None,
+        load_session: bool = True,
     ) -> int:
-        """Run the application, loading session or creating default window."""
-        import sys
+        """Run the application, loading session or creating default window.
+
+        Args:
+            default_main_window_type: Type of main window to create if no session loaded
+            session_file: Path to specific session file to load
+            load_session: If False, skip loading any session (default: True)
+        """
 
         self._app = QApplication(sys.argv)
         self._app.setApplicationName(self._app_name)
 
         session = SessionManager.get_instance()
 
-        if session_file:
-            try:
-                session.load(session_file)
-            except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-                print(f"Failed to load session: {e}")
-                if default_main_window_type:
-                    self._create_default_window(default_main_window_type)
-        else:
-            recent = session.get_recent_sessions(1)
-            if recent:
+        if load_session:
+            if session_file:
                 try:
-                    session.load(recent[0])
-                except (json.JSONDecodeError, KeyError) as e:
-                    print(f"Failed to load recent session: {e}")
+                    session.load(session_file)
+                except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+                    print(f"Failed to load session: {e}")
                     if default_main_window_type:
                         self._create_default_window(default_main_window_type)
-            elif default_main_window_type:
+            else:
+                recent = session.get_recent_sessions(1)
+                if recent:
+                    try:
+                        session.load(recent[0])
+                    except (json.JSONDecodeError, KeyError) as e:
+                        print(f"Failed to load recent session: {e}")
+                        if default_main_window_type:
+                            self._create_default_window(default_main_window_type)
+                elif default_main_window_type:
+                    self._create_default_window(default_main_window_type)
+        else:
+            # --no-session mode: just create default window without loading session
+            if default_main_window_type:
                 self._create_default_window(default_main_window_type)
 
         self._app.aboutToQuit.connect(lambda: session.close_all(save=False))
