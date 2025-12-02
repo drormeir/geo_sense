@@ -5,13 +5,20 @@ A seismic data visualization application that demonstrates the UAS framework
 with SEGY file support using matplotlib for rendering.
 
 Run with: python seismic_app.py
+
+Command-line options:
+  --test-mode          Run in test mode (minimal GUI, faster startup)
+  --auto-exit SECONDS  Automatically exit after N seconds (for testing)
+  --no-session         Don't load or save session state
 """
 
 from typing import Any
 import sys
+import argparse
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QAction
+from PySide6.QtCore import QTimer
 
 
 from uas import (
@@ -160,12 +167,65 @@ class SeismicMainWindow(UASMainWindow):
 
 
 
+def parse_arguments() -> argparse.Namespace:
+    """Parse command-line arguments."""
+
+    epilog_text = """
+Examples:
+  %(prog)s                                    # Normal startup
+  %(prog)s --no-session                       # Start fresh without loading previous session
+  %(prog)s --auto-exit 3                      # Exit automatically after 3 seconds (testing)
+  %(prog)s --test-mode --no-session           # Test mode without session state
+  %(prog)s --auto-exit 2 --no-session         # Quick startup test
+
+Notes:
+  --auto-exit is useful for automated testing to verify the application starts correctly
+  --no-session is useful for testing default behavior without saved state
+  --test-mode is reserved for future testing optimizations
+"""
+
+    parser = argparse.ArgumentParser(
+        description="Seismic Viewer - A seismic data visualization application",
+        epilog=epilog_text,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--test-mode",
+        action="store_true",
+        help="Run in test mode (minimal GUI, faster startup for automated testing)",
+    )
+
+    parser.add_argument(
+        "--auto-exit",
+        type=float,
+        metavar="SECONDS",
+        help="Automatically exit after N seconds (useful for startup tests)",
+    )
+
+    parser.add_argument(
+        "--no-session",
+        action="store_true",
+        help="Don't load or save session state (start fresh)",
+    )
+
+    return parser.parse_args()
+
+
 def main() -> int:
     """Run the Seismic Viewer application."""
+    args = parse_arguments()
+
     app = UASApplication("Seismic Viewer")
 
-    # Register global settings for session persistence
-    GlobalSettings.register()
+    # Register global settings for session persistence (unless --no-session)
+    if not args.no_session:
+        GlobalSettings.register()
+
+    # Setup auto-exit timer if requested (for testing)
+    if args.auto_exit:
+        print(f"Auto-exit scheduled in {args.auto_exit} seconds")
+        QTimer.singleShot(int(args.auto_exit * 1000), QApplication.quit)
 
     return app.run(default_main_window_type="seismic_main")
 
