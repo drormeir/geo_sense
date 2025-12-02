@@ -125,9 +125,7 @@ class SessionManager:
         }
 
         # Serialize all registered plugins
-        for name, plugin in self._plugins.items():
-            session_dict["plugins"][name] = plugin.serialize()
-
+        session_dict["plugins"] = { name: plugin.serialize() for name, plugin in self._plugins.items() }
         return session_dict
 
     def deserialize(self, state: dict[str, Any]) -> None:
