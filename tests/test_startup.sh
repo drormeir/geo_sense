@@ -54,11 +54,11 @@ sys.path.insert(0, '.')
 from seismic_app import parse_arguments
 
 # Mock sys.argv
-sys.argv = ['seismic_app.py', '--test-mode', '--auto-exit', '2', '--no-session']
+sys.argv = ['seismic_app.py', '--test-mode', '--auto-exit', '2', '--session-mode', '-1']
 args = parse_arguments()
 assert args.test_mode == True
 assert args.auto_exit == 2.0
-assert args.no_session == True
+assert args.session_mode == -1
 " 2>/dev/null
 if [ $? -eq 0 ]; then
     pass_test "Argument parsing works"
@@ -69,7 +69,7 @@ fi
 # Test 3: Auto-exit timing
 echo "Test 3: Verify auto-exit timing (2 seconds)"
 START_TIME=$(date +%s)
-$PYTHON $APP --auto-exit 2 --no-session > /tmp/startup_test.log 2>&1
+$PYTHON $APP --auto-exit 2 --session-mode -1 > /tmp/startup_test.log 2>&1
 EXIT_CODE=$?
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
@@ -106,7 +106,7 @@ fi
 # Test 6: Screenshot feature
 echo "Test 6: Test --screenshot feature"
 SCREENSHOT_PATH="/tmp/test_screenshot_$$.png"
-$PYTHON $APP --screenshot "$SCREENSHOT_PATH" --auto-exit 1 --no-session > /dev/null 2>&1
+$PYTHON $APP --screenshot "$SCREENSHOT_PATH" --auto-exit 1 --session-mode -1 > /dev/null 2>&1
 if [ -f "$SCREENSHOT_PATH" ]; then
     SIZE=$(stat -f%z "$SCREENSHOT_PATH" 2>/dev/null || stat -c%s "$SCREENSHOT_PATH" 2>/dev/null)
     if [ "$SIZE" -gt 1000 ]; then
@@ -132,38 +132,72 @@ else
     fail_test "--print-session failed"
 fi
 
-# Test 8: No-session mode
-echo "Test 8: Test --no-session mode"
-$PYTHON $APP --auto-exit 1 --no-session > /tmp/no_session_test.log 2>&1
+# Test 8: Session mode -1 (no read/write)
+echo "Test 8: Test --session-mode -1 (no read/write)"
+touch /tmp/session_mode_test_marker
+sleep 1
+$PYTHON $APP --auto-exit 1 --session-mode -1 > /tmp/session_mode_test.log 2>&1
+sleep 1
 if [ $? -eq 0 ]; then
-    if ! grep -q "Session" /tmp/no_session_test.log 2>/dev/null; then
-        pass_test "--no-session mode works"
+    if [ ~/.config/uas_sessions/default.json -ot /tmp/session_mode_test_marker ]; then
+        pass_test "Session mode -1: no read/write works"
     else
-        warn_test "--no-session mode may have loaded session"
-        ((TEST_COUNT++))
+        fail_test "Session mode -1: session was modified"
     fi
 else
-    fail_test "--no-session mode failed"
+    fail_test "Session mode -1: app failed"
+fi
+rm -f /tmp/session_mode_test_marker
+
+# Test 9: Session mode 0 (write only - fresh start)
+echo "Test 9: Test --session-mode 0 (write only - fresh start)"
+BEFORE_TIME=$(stat -c "%Y" ~/.config/uas_sessions/default.json 2>/dev/null || echo "0")
+sleep 1
+$PYTHON $APP --auto-exit 1 --session-mode 0 > /dev/null 2>&1
+sleep 1
+AFTER_TIME=$(stat -c "%Y" ~/.config/uas_sessions/default.json 2>/dev/null || echo "0")
+if [ "$AFTER_TIME" -gt "$BEFORE_TIME" ]; then
+    pass_test "Session mode 0: writes new session"
+else
+    fail_test "Session mode 0: session not written"
 fi
 
-# Test 9: Test with session corruption recovery
-echo "Test 9: Test session corruption recovery"
+# Test 10: Session mode 1 (normal - default)
+echo "Test 10: Test --session-mode 1 (normal - default)"
+$PYTHON $APP --auto-exit 1 --session-mode 1 > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    pass_test "Session mode 1: normal mode works"
+else
+    fail_test "Session mode 1: app failed"
+fi
+
+# Test 11: Default session mode (should be 1)
+echo "Test 11: Test default session mode (should be 1)"
+$PYTHON $APP --auto-exit 1 > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    pass_test "Default session mode works"
+else
+    fail_test "Default session mode failed"
+fi
+
+# Test 12: Test with session corruption recovery
+echo "Test 12: Test session corruption recovery"
 # Create a corrupted session file
 mkdir -p ~/.config/uas_sessions
 echo "{ invalid json" > ~/.config/uas_sessions/test_corrupted.json
-# Test should handle gracefully (though we're using --no-session to avoid issues)
-$PYTHON $APP --auto-exit 1 --no-session > /dev/null 2>&1
+# Test should handle gracefully (using session-mode -1 to avoid issues)
+$PYTHON $APP --auto-exit 1 --session-mode -1 > /dev/null 2>&1
 if [ $? -eq 0 ]; then
-    pass_test "App handles corrupted session (with --no-session)"
+    pass_test "App handles corrupted session (with --session-mode -1)"
 else
     fail_test "App failed with corrupted session"
 fi
 rm -f ~/.config/uas_sessions/test_corrupted.json
 
-# Test 10: Quick startup/shutdown cycle
-echo "Test 10: Rapid startup/shutdown cycle"
+# Test 13: Quick startup/shutdown cycle
+echo "Test 13: Rapid startup/shutdown cycle"
 for i in {1..3}; do
-    $PYTHON $APP --auto-exit 1 --no-session > /dev/null 2>&1 &
+    $PYTHON $APP --auto-exit 1 --session-mode -1 > /dev/null 2>&1 &
     APP_PID=$!
     sleep 2
     if ! ps -p $APP_PID > /dev/null 2>&1; then

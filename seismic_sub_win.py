@@ -3,7 +3,7 @@ import os
 from typing import Any
 
 from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox, QCheckBox
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
 from matplotlib.backend_bases import NavigationToolbar2
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.gridspec as gridspec
 from uas import UASSubWindow, UASMainWindow, auto_register
 
 import segyio
@@ -173,7 +174,33 @@ class SeismicSubWindow(UASSubWindow):
 
         self.title = "Seismic View"
         self._fig = Figure(figsize=(10, 6))
-        self._axes = self._fig.add_subplot(111)
+
+        # Use separate subplots for image and colorbar
+        # GridSpec approach with proper wspace handling for right axis
+        self._use_separate_colorbar_subplot = True
+
+        # Colorbar sizing parameters (easy to customize)
+        self._colorbar_width_ratio = 1      # Colorbar width relative to image (image:colorbar = 20:1)
+        self._image_width_ratio = 20        # Image width relative to colorbar
+
+        if self._use_separate_colorbar_subplot:
+            # Create GridSpec: image takes most space, colorbar is narrow
+            # Note: We'll set margins and wspace later via _adjust_layout_with_fixed_margins
+            gs = gridspec.GridSpec(
+                1, 2,
+                figure=self._fig,
+                width_ratios=[self._image_width_ratio, self._colorbar_width_ratio],
+                wspace=0.05,  # Will be updated dynamically based on right axis visibility
+                # Initial margins (will be updated by _adjust_layout_with_fixed_margins)
+                left=0.1, right=0.9, top=0.95, bottom=0.1
+            )
+            self._axes = self._fig.add_subplot(gs[0])
+            self._colorbar_axes = self._fig.add_subplot(gs[1])
+            self._gridspec = gs  # Keep reference to update margins later
+        else:
+            self._axes = self._fig.add_subplot(111)
+            self._colorbar_axes = None
+            self._gridspec = None
 
         self._canvas = FigureCanvasQTAgg(self._fig)
 
@@ -206,6 +233,47 @@ class SeismicSubWindow(UASSubWindow):
         # Register as listener for global settings changes
         GlobalSettings.add_listener(self._on_global_settings_changed)
 
+    def _show_error(self, title: str, message: str) -> None:
+        """Show error message by rendering it on the matplotlib canvas.
+
+        This method:
+        1. Prints the error to terminal (so it's visible in logs)
+        2. Renders error message as text on the matplotlib canvas
+        3. No dialog needed - error is visible in screenshots automatically
+        """
+        # Print to terminal
+        print(f"ERROR: {title} - {message}", flush=True)
+
+        # Clear the axes and display error message on canvas
+        self._axes.clear()
+        self._axes.set_xlim(0, 1)
+        self._axes.set_ylim(0, 1)
+        self._axes.axis('off')  # Hide axes
+
+        # Add error icon/symbol at top
+        self._axes.text(0.5, 0.75, '⚠️',
+                       ha='center', va='center',
+                       fontsize=80, color='red',
+                       transform=self._axes.transAxes)
+
+        # Add error title
+        self._axes.text(0.5, 0.55, title,
+                       ha='center', va='center',
+                       fontsize=20, weight='bold', color='darkred',
+                       transform=self._axes.transAxes)
+
+        # Add error message (wrap text if needed)
+        self._axes.text(0.5, 0.35, message,
+                       ha='center', va='center',
+                       fontsize=14, color='black',
+                       wrap=True,
+                       transform=self._axes.transAxes)
+
+        # Set background color to light red
+        self._axes.set_facecolor('#ffebee')
+
+        # Redraw canvas
+        self._canvas.draw()
 
     def _setup_toolbar(self) -> None:
         """Set up the toolbar with zoom toggle button."""
@@ -603,7 +671,7 @@ class SeismicSubWindow(UASSubWindow):
     def load_file(self, filename: str) -> bool:
         """Load a seismic file (SEGY, rd3, or rd7) into this subwindow."""
         if not filename or not os.path.exists(filename) or not os.path.isfile(filename):
-            QMessageBox.critical(self, "Error", "Invalid file")
+            self._show_error("Error", f"Invalid file: {filename}")
             return False
         
         file_ext = os.path.splitext(filename)[1].lower()
@@ -621,7 +689,7 @@ class SeismicSubWindow(UASSubWindow):
 
     def canvas_load_file(self, filename: str, file_type: str) -> bool:
         if file_type not in ['sgy', 'rd3', 'rd7']:
-            QMessageBox.critical(self, "Error", "Invalid file type")
+            self._show_error("Error", f"Invalid file type: {file_type}")
             return False
 
         try:
@@ -705,7 +773,7 @@ class SeismicSubWindow(UASSubWindow):
             self._amplitude_max = percentile
             ret = True
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load file:\n{str(e)}")
+            self._show_error("Error", f"Failed to load file:\n{str(e)}")
             self.remove_colorbar_indicator()
             self.remove_colorbar()
             self._trace_coords = None
@@ -743,28 +811,53 @@ class SeismicSubWindow(UASSubWindow):
 
         self._image = self._axes.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
 
-        # Create a dedicated axis for the colorbar positioned after the right axis
-        # Get settings to calculate colorbar position
-        right_axis_visible = self._display_settings.get('right', 'None') != 'None'
+        # Create colorbar in separate subplot or attached axis
+        if self._use_separate_colorbar_subplot and self._colorbar_axes is not None:
+            # wspace is the horizontal spacing between subplots as a fraction of average subplot width
+            # When right axis is visible, we need extra space for the axis labels
+            right_axis_visible = self._display_settings.get('right', 'None') != 'None'
 
-        # Calculate colorbar width as a fraction of the total figure width
-        width_px = self._fig.get_figwidth() * self._fig.dpi
-        colorbar_width_fraction = GlobalSettings.get_right_margin_colorbar_px() / width_px
+            # Calculate wspace based on right axis visibility
+            # wspace = horizontal_space / average_subplot_width
+            # For width_ratios=[20, 1], average width = (20+1)/2 = 10.5 units
+            if right_axis_visible:
+                # Need space for right axis tick labels
+                # Use a very large wspace value to create gap for axis labels + some buffer
+                self._gridspec.update(wspace=0.8)  # 80% of average subplot width
+            else:
+                # Smaller spacing when no right axis
+                self._gridspec.update(wspace=0.1)  # 10% of average subplot width
 
-        # Calculate pad (space between axes and colorbar) based on right axis visibility
-        if right_axis_visible:
-            # If right axis is visible, position colorbar after it
-            pad_px = GlobalSettings.get_right_margin_image_axis_px()
+            # Use the separate subplot for colorbar
+            self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude")
+
+            # DEBUG: Visualize subplot boundaries with background colors
+            # self._axes.set_facecolor((1.0, 1.0, 0.8, 0.3))  # Image subplot - light yellow transparent
+            # self._colorbar_axes.set_facecolor((0.8, 0.8, 1.0, 0.3))  # Colorbar subplot - light blue transparent
         else:
-            # If no right axis, minimal padding
-            pad_px = 10
+            # Create a dedicated axis for the colorbar positioned after the right axis
+            # Get settings to calculate colorbar position
+            right_axis_visible = self._display_settings.get('right', 'None') != 'None'
 
-        pad_fraction = pad_px / width_px
+            # Calculate colorbar width as a fraction of the total figure width
+            width_px = self._fig.get_figwidth() * self._fig.dpi
+            colorbar_width_fraction = GlobalSettings.get_right_margin_colorbar_px() / width_px
 
-        # Create colorbar with calculated positioning
-        divider = make_axes_locatable(self._axes)
-        cax = divider.append_axes("right", size=f"{colorbar_width_fraction*100}%", pad=pad_fraction)
-        self._colorbar = self._fig.colorbar(self._image, cax=cax, label="Amplitude")
+            # Calculate pad (space between axes and colorbar) based on right axis visibility
+            if right_axis_visible:
+                # If right axis is visible, position colorbar after it
+                # Need extra space for axis labels that extend beyond the spine
+                pad_px = GlobalSettings.get_right_margin_image_axis_px() + 60  # Add 60px for tick labels
+            else:
+                # If no right axis, minimal padding
+                pad_px = 10
+
+            pad_fraction = pad_px / width_px
+
+            # Create colorbar with calculated positioning
+            divider = make_axes_locatable(self._axes)
+            cax = divider.append_axes("right", size=f"{colorbar_width_fraction*100}%", pad=pad_fraction)
+            self._colorbar = self._fig.colorbar(self._image, cax=cax, label="Amplitude")
 
         self._colorbar_indicator = None  # Reset indicator on re-render
         self._axes.set_xlabel("Trace Number")
@@ -788,7 +881,6 @@ class SeismicSubWindow(UASSubWindow):
         """Adjust figure layout with fixed pixel margins from global settings."""
         # Get margins from global settings
         left_margin_px = GlobalSettings.get_left_margin_px()
-        right_margin_px = GlobalSettings.get_total_right_margin()
         top_margin_px = GlobalSettings.get_top_margin_px()
         bottom_margin_px = GlobalSettings.get_bottom_margin_px()
 
@@ -798,12 +890,78 @@ class SeismicSubWindow(UASSubWindow):
 
         # Convert pixels to proportions
         left = left_margin_px / width_px
-        right = 1.0 - (right_margin_px / width_px)
         bottom = bottom_margin_px / height_px
         top = 1.0 - (top_margin_px / height_px)
 
         # Apply the margins
-        self._fig.subplots_adjust(left=left, right=right, top=top, bottom=bottom)
+        if self._use_separate_colorbar_subplot and self._gridspec is not None:
+            # For separate subplots: colorbar is in its own subplot (gs[1])
+            # Check if right axis is visible on the image subplot
+            right_axis_visible = self._display_settings.get('right', 'None') != 'None'
+
+            # Calculate wspace (horizontal space between image and colorbar subplots)
+            # This space is needed for right axis labels if present
+            subplot_spacing_px = GlobalSettings.get_subplot_spacing_px()
+            wspace = subplot_spacing_px / width_px  # Convert pixels to figure fraction
+
+            # GridSpec right margin: always use a minimal value, since we'll adjust subplots individually
+            # Use a fixed small margin just to prevent elements touching the absolute edge
+            right_margin_px = 10  # Fixed minimal margin
+            right = 1.0 - (right_margin_px / width_px)
+
+            # Update GridSpec margins and wspace
+            self._gridspec.update(left=left, right=right, top=top, bottom=bottom, wspace=wspace)
+
+            # MANUALLY ADJUST IMAGE AXES: Shrink to leave room for right axis labels
+            # GridSpec creates the axes positions, but right axis labels extend outside the axes boundary
+            if right_axis_visible:
+                # Get GridSpec-defined position for image subplot
+                gs0_bounds = self._gridspec[0].get_position(self._fig)
+
+                # Calculate how much to shrink from the right side
+                right_axis_space_px = GlobalSettings.get_right_margin_image_axis_px()
+                right_shrink = right_axis_space_px / width_px
+
+                # Set new position: shrink width from the right side
+                self._axes.set_position([
+                    gs0_bounds.x0,
+                    gs0_bounds.y0,
+                    gs0_bounds.width - right_shrink,
+                    gs0_bounds.height
+                ])
+            else:
+                # No right axis, use full GridSpec-defined width
+                gs0_bounds = self._gridspec[0].get_position(self._fig)
+                self._axes.set_position([gs0_bounds.x0, gs0_bounds.y0, gs0_bounds.width, gs0_bounds.height])
+
+            # MANUALLY ADJUST COLORBAR AXES: Set fixed width and position to leave room for "Amplitude" label
+            gs1_bounds = self._gridspec[1].get_position(self._fig)
+
+            # Get the desired colorbar width in pixels and convert to figure fraction
+            colorbar_width_px = GlobalSettings.get_colorbar_width_px()
+            colorbar_width_frac = colorbar_width_px / width_px
+
+            # The colorbar should be aligned to the right side of its GridSpec cell, minus the label space
+            colorbar_label_space_px = GlobalSettings.get_right_margin_colorbar_label_px()
+            colorbar_label_space_frac = colorbar_label_space_px / width_px
+
+            # Calculate the left position: start from right edge, subtract label space and colorbar width
+            colorbar_right_edge = gs1_bounds.x1 - colorbar_label_space_frac
+            colorbar_left = colorbar_right_edge - colorbar_width_frac
+
+            self._colorbar_axes.set_position([
+                colorbar_left,
+                gs1_bounds.y0,
+                colorbar_width_frac,
+                gs1_bounds.height
+            ])
+        else:
+            # For single subplot: right margin includes everything
+            right_margin_px = GlobalSettings.get_total_right_margin()
+            right = 1.0 - (right_margin_px / width_px)
+
+            # Use regular subplots_adjust for old method
+            self._fig.subplots_adjust(left=left, right=right, top=top, bottom=bottom)
 
 
     def _on_global_settings_changed(self) -> None:
@@ -811,6 +969,50 @@ class SeismicSubWindow(UASSubWindow):
         if self._data is not None:
             self._adjust_layout_with_fixed_margins()
             self._canvas.draw_idle()
+
+    def set_colorbar_width_ratio(self, ratio: float) -> None:
+        """
+        Set the colorbar width relative to the image.
+
+        Args:
+            ratio: Width ratio (e.g., 1.0 means image:colorbar = 20:1)
+        """
+        self._colorbar_width_ratio = ratio
+        self._recreate_subplots()
+
+    def set_colorbar_spacing(self, spacing: float) -> None:
+        """
+        Set the horizontal spacing between image and colorbar.
+
+        Args:
+            spacing: Spacing as fraction of figure width (0.0 to 1.0)
+        """
+        self._colorbar_spacing = spacing
+        self._recreate_subplots()
+
+    def _recreate_subplots(self) -> None:
+        """Recreate subplots with updated parameters."""
+        if not self._use_separate_colorbar_subplot:
+            return
+
+        # Clear existing subplots
+        self._fig.clear()
+
+        # Recreate GridSpec with new parameters
+        gs = gridspec.GridSpec(
+            1, 2,
+            figure=self._fig,
+            width_ratios=[self._image_width_ratio, self._colorbar_width_ratio],
+            wspace=self._colorbar_spacing,
+            left=0.1, right=0.9, top=0.95, bottom=0.1
+        )
+        self._axes = self._fig.add_subplot(gs[0])
+        self._colorbar_axes = self._fig.add_subplot(gs[1])
+        self._gridspec = gs  # Keep reference
+
+        # Re-render if we have data
+        if self._data is not None:
+            self.canvas_render()
 
     def closeEvent(self, event) -> None:
         """Handle window close event - unregister from global settings."""
@@ -946,7 +1148,7 @@ class SeismicSubWindow(UASSubWindow):
 
         """
         if self._data is None:
-            QMessageBox.critical(self, "Error", "No data to save")
+            self._show_error("Error", "No data to save")
             return
 
         while True:
@@ -966,7 +1168,7 @@ class SeismicSubWindow(UASSubWindow):
                 label = 'MALA rd7'
                 filter = '(*.rd7)'
             else:
-                QMessageBox.critical(self, "Error", "Invalid file type")
+                self._show_error("Error", f"Invalid file type: {file_type}")
                 return
 
             filename, _ = QFileDialog.getSaveFileName(self, f"Save as {label} File", default_name, f"{label} Files ({filter});;All Files (*)")

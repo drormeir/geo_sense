@@ -222,6 +222,7 @@ class UASApplication:
         default_main_window_type: str | None = None,
         session_file: str | Path | None = None,
         load_session: bool = True,
+        save_session: bool = True,
     ) -> int:
         """Run the application, loading session or creating default window.
 
@@ -229,6 +230,7 @@ class UASApplication:
             default_main_window_type: Type of main window to create if no session loaded
             session_file: Path to specific session file to load
             load_session: If False, skip loading any session (default: True)
+            save_session: If False, skip saving session on exit (default: True)
         """
 
         self._app = QApplication(sys.argv)
@@ -256,11 +258,16 @@ class UASApplication:
                 elif default_main_window_type:
                     self._create_default_window(default_main_window_type)
         else:
-            # --no-session mode: just create default window without loading session
+            # Not loading session: create default window
             if default_main_window_type:
                 self._create_default_window(default_main_window_type)
 
-        self._app.aboutToQuit.connect(lambda: session.close_all(save=False))
+        # Disable auto-save if save_session is False
+        if not save_session:
+            session.auto_save_enabled = False
+
+        # Setup quit handler: save session only if save_session is True
+        self._app.aboutToQuit.connect(lambda: session.close_all(save=save_session))
 
         return self._app.exec()
 

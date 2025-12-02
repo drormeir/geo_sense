@@ -7,9 +7,10 @@ with SEGY file support using matplotlib for rendering.
 Run with: python seismic_app.py
 
 Command-line options:
-  --test-mode          Run in test mode (minimal GUI, faster startup)
-  --auto-exit SECONDS  Automatically exit after N seconds (for testing)
-  --no-session         Don't load or save session state
+  --test-mode            Run in test mode (minimal GUI, faster startup)
+  --auto-exit SECONDS    Automatically exit after N seconds (for testing)
+  --session-mode MODE    Session mode: -1=no read/write, 0=write only, 1=normal (default)
+  --screenshot PATH      Save screenshot to PATH after startup (for debugging GUI)
 """
 
 from typing import Any
@@ -49,11 +50,21 @@ class SeismicMainWindow(UASMainWindow):
     """
 
     type_name = "seismic_main"
+    _pending_screenshot_path = None  # Class variable for passing screenshot path
+    _pending_auto_exit_seconds = None  # Class variable for auto-exit timer
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, screenshot_path: str = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Seismic Viewer")
         self.setWindowIcon(create_gs_icon())
+
+        # Check for pending screenshot path from command line
+        self._screenshot_path = screenshot_path or self.__class__._pending_screenshot_path
+        self.__class__._pending_screenshot_path = None  # Clear after use
+
+        # Check for pending auto-exit timer
+        self._auto_exit_seconds = self.__class__._pending_auto_exit_seconds
+        self.__class__._pending_auto_exit_seconds = None  # Clear after use
 
     def _setup_menus(self) -> None:
         """Set up the menu bar with File menu and seismic-specific actions."""
@@ -127,6 +138,36 @@ class SeismicMainWindow(UASMainWindow):
         """Apply AGC to the active seismic subwindow (placeholder)."""
         QMessageBox.information(self, "AGC", "AGC function not yet implemented")
 
+    def showEvent(self, event) -> None:
+        """Handle window show event - take screenshot and setup auto-exit if requested."""
+        super().showEvent(event)
+
+        if self._screenshot_path:
+            # Schedule screenshot after a short delay to ensure window is fully rendered
+            QTimer.singleShot(500, self._take_screenshot)
+
+        if self._auto_exit_seconds:
+            # Schedule auto-exit timer (must be done after event loop starts)
+            print(f"Auto-exit scheduled in {self._auto_exit_seconds} seconds")
+            QTimer.singleShot(int(self._auto_exit_seconds * 1000), QApplication.quit)
+
+    def _take_screenshot(self) -> None:
+        """Take a screenshot of the main window and save it."""
+        if not self._screenshot_path:
+            return
+
+        try:
+            # Grab the window contents
+            pixmap = self.grab()
+
+            # Save to file
+            if pixmap.save(self._screenshot_path):
+                print(f"✓ Screenshot saved to: {self._screenshot_path}")
+            else:
+                print(f"✗ Failed to save screenshot to: {self._screenshot_path}")
+        except Exception as e:
+            print(f"✗ Screenshot error: {e}")
+
     def on_subwindow_hover(self, hover_info: dict[str, Any]) -> None:
         """
         Update status bar with hover information from a subwindow.
@@ -172,15 +213,19 @@ def parse_arguments() -> argparse.Namespace:
 
     epilog_text = """
 Examples:
-  %(prog)s                                    # Normal startup
-  %(prog)s --no-session                       # Start fresh without loading previous session
+  %(prog)s                                    # Normal startup (session-mode 1)
+  %(prog)s --session-mode -1                  # No session read/write (like old --no-session)
+  %(prog)s --session-mode 0                   # Fresh start, save new session on exit
   %(prog)s --auto-exit 3                      # Exit automatically after 3 seconds (testing)
-  %(prog)s --test-mode --no-session           # Test mode without session state
-  %(prog)s --auto-exit 2 --no-session         # Quick startup test
+  %(prog)s --test-mode --session-mode -1      # Test mode without session state
+  %(prog)s --auto-exit 2 --session-mode -1    # Quick startup test
 
 Notes:
   --auto-exit is useful for automated testing to verify the application starts correctly
-  --no-session is useful for testing default behavior without saved state
+  --session-mode controls session behavior:
+    -1: Don't load or save session (no read/write)
+     0: Start fresh, save new session on exit (write only)
+     1: Normal mode - load and save session (default)
   --test-mode is reserved for future testing optimizations
 """
 
@@ -204,9 +249,25 @@ Notes:
     )
 
     parser.add_argument(
-        "--no-session",
+        "--session-mode",
+        type=int,
+        default=1,
+        choices=[-1, 0, 1],
+        metavar="MODE",
+        help="Session mode: -1=no read/write, 0=write only (fresh start), 1=normal (default)",
+    )
+
+    parser.add_argument(
+        "--screenshot",
+        type=str,
+        metavar="PATH",
+        help="Save screenshot to PATH after window is shown (e.g., /tmp/screenshot.png)",
+    )
+
+    parser.add_argument(
+        "--print-session",
         action="store_true",
-        help="Don't load or save session state (start fresh)",
+        help="Print the session file path and contents, then exit",
     )
 
     return parser.parse_args()
@@ -216,18 +277,54 @@ def main() -> int:
     """Run the Seismic Viewer application."""
     args = parse_arguments()
 
+    # Handle --print-session flag
+    if args.print_session:
+        import json
+
+        # Create a minimal UAS app to get access to SessionManager
+        app = UASApplication("Seismic Viewer")
+
+        # Get the session path by calling save() which returns the path
+        session_path = SessionManager.get_instance().save()
+        print(f"Session file path: {session_path}")
+
+        try:
+            with open(session_path, 'r') as f:
+                session_data = json.load(f)
+            print("\nSession file contents:")
+            print(json.dumps(session_data, indent=2))
+            return 0
+        except FileNotFoundError:
+            print(f"Session file not found at: {session_path}")
+            return 1
+        except Exception as e:
+            print(f"Error reading session file: {e}")
+            return 1
+
     app = UASApplication("Seismic Viewer")
 
-    # Register global settings for session persistence (unless --no-session)
-    if not args.no_session:
+    # Determine session behavior from session_mode
+    # -1: no read/write, 0: write only (fresh start), 1: normal (read/write)
+    load_session = (args.session_mode == 1)  # Only load in mode 1
+    save_session = (args.session_mode >= 0)  # Save in modes 0 and 1
+
+    # Register global settings for session persistence (unless session_mode is -1)
+    if args.session_mode >= 0:
         GlobalSettings.register()
 
-    # Setup auto-exit timer if requested (for testing)
-    if args.auto_exit:
-        print(f"Auto-exit scheduled in {args.auto_exit} seconds")
-        QTimer.singleShot(int(args.auto_exit * 1000), QApplication.quit)
+    # Store screenshot path for main window (hack: use a class variable)
+    if args.screenshot:
+        SeismicMainWindow._pending_screenshot_path = args.screenshot
 
-    return app.run(default_main_window_type="seismic_main")
+    # Store auto-exit seconds for main window (will be set up in showEvent)
+    if args.auto_exit:
+        SeismicMainWindow._pending_auto_exit_seconds = args.auto_exit
+
+    return app.run(
+        default_main_window_type="seismic_main",
+        load_session=load_session,
+        save_session=save_session
+    )
 
 
 if __name__ == "__main__":

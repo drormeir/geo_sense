@@ -57,12 +57,16 @@ class GlobalSettings(QDialog):
 
         # Plot margin settings (in pixels)
         self.left_margin_px: int = 60
-        # Right margins stack outward from the image:
-        self.right_margin_image_axis_px: int = 60      # Space for right image axis labels (closest to image)
-        self.right_margin_colorbar_px: int = 60        # Space for colorbar (middle)
-        self.right_margin_colorbar_label_px: int = 50  # Space for "Amplitude" label (outermost)
+        self.right_margin_image_axis_px: int = 60      # Space for right image axis labels
+        self.right_margin_colorbar_label_px: int = 50  # Space for "Amplitude" label on colorbar
         self.top_margin_px: int = 40
         self.bottom_margin_px: int = 50
+
+        # Subplot spacing (for GridSpec wspace between image and colorbar)
+        self.subplot_spacing_px: int = 80  # Horizontal space between image and colorbar subplots
+
+        # Colorbar dimensions
+        self.colorbar_width_px: int = 30  # Width of the colorbar itself
 
         # Unit system
         self.unit_system: UnitSystem = UnitSystem.MKS
@@ -93,11 +97,6 @@ class GlobalSettings(QDialog):
         return cls._get_instance().right_margin_image_axis_px
 
     @classmethod
-    def get_right_margin_colorbar_px(cls) -> int:
-        """Get right colorbar margin in pixels."""
-        return cls._get_instance().right_margin_colorbar_px
-
-    @classmethod
     def get_right_margin_colorbar_label_px(cls) -> int:
         """Get right colorbar label margin in pixels."""
         return cls._get_instance().right_margin_colorbar_label_px
@@ -113,6 +112,16 @@ class GlobalSettings(QDialog):
         return cls._get_instance().bottom_margin_px
 
     @classmethod
+    def get_subplot_spacing_px(cls) -> int:
+        """Get subplot spacing in pixels."""
+        return cls._get_instance().subplot_spacing_px
+
+    @classmethod
+    def get_colorbar_width_px(cls) -> int:
+        """Get colorbar width in pixels."""
+        return cls._get_instance().colorbar_width_px
+
+    @classmethod
     def get_unit_system(cls) -> UnitSystem:
         """Get the current unit system."""
         return cls._get_instance().unit_system
@@ -120,20 +129,18 @@ class GlobalSettings(QDialog):
     @classmethod
     def get_total_right_margin(cls) -> int:
         """
-        Get total right margin (sum of all right components stacked outward from image).
+        Get total right margin (for single subplot mode only).
 
-        Stack order from image outward:
-        1. Image axis labels (closest to image)
-        2. Colorbar
-        3. Colorbar label (outermost)
+        For GridSpec mode with separate colorbar subplot, margins are handled differently.
+        This method is only used when using a single subplot without GridSpec.
 
         Returns:
             Total right margin in pixels.
         """
         instance = cls._get_instance()
         return (instance.right_margin_image_axis_px +
-                instance.right_margin_colorbar_px +
-                instance.right_margin_colorbar_label_px)
+                instance.right_margin_colorbar_label_px +
+                instance.subplot_spacing_px)
 
     @classmethod
     def add_listener(cls, callback: Callable[[], None]) -> None:
@@ -250,10 +257,6 @@ class GlobalSettings(QDialog):
         self._right_image_axis_spin.setRange(0, 200)
         margins_layout.addRow("Right image axis:", self._right_image_axis_spin)
 
-        self._right_colorbar_spin = QSpinBox()
-        self._right_colorbar_spin.setRange(0, 200)
-        margins_layout.addRow("Right colorbar:", self._right_colorbar_spin)
-
         self._right_colorbar_label_spin = QSpinBox()
         self._right_colorbar_label_spin.setRange(0, 200)
         margins_layout.addRow("Right colorbar label:", self._right_colorbar_label_spin)
@@ -265,6 +268,14 @@ class GlobalSettings(QDialog):
         self._bottom_spin = QSpinBox()
         self._bottom_spin.setRange(0, 200)
         margins_layout.addRow("Bottom margin:", self._bottom_spin)
+
+        self._subplot_spacing_spin = QSpinBox()
+        self._subplot_spacing_spin.setRange(0, 200)
+        margins_layout.addRow("Subplot spacing:", self._subplot_spacing_spin)
+
+        self._colorbar_width_spin = QSpinBox()
+        self._colorbar_width_spin.setRange(10, 100)
+        margins_layout.addRow("Colorbar width:", self._colorbar_width_spin)
 
         margins_group.setLayout(margins_layout)
         layout.addWidget(margins_group)
@@ -296,10 +307,11 @@ class GlobalSettings(QDialog):
         return {
             'left_margin_px': self.left_margin_px,
             'right_margin_image_axis_px': self.right_margin_image_axis_px,
-            'right_margin_colorbar_px': self.right_margin_colorbar_px,
             'right_margin_colorbar_label_px': self.right_margin_colorbar_label_px,
             'top_margin_px': self.top_margin_px,
             'bottom_margin_px': self.bottom_margin_px,
+            'subplot_spacing_px': self.subplot_spacing_px,
+            'colorbar_width_px': self.colorbar_width_px,
             'unit_system': self.unit_system.value,
         }
 
@@ -312,10 +324,11 @@ class GlobalSettings(QDialog):
         """
         self.left_margin_px = state.get('left_margin_px', 60)
         self.right_margin_image_axis_px = state.get('right_margin_image_axis_px', 60)
-        self.right_margin_colorbar_px = state.get('right_margin_colorbar_px', 60)
         self.right_margin_colorbar_label_px = state.get('right_margin_colorbar_label_px', 50)
         self.top_margin_px = state.get('top_margin_px', 40)
         self.bottom_margin_px = state.get('bottom_margin_px', 50)
+        self.subplot_spacing_px = state.get('subplot_spacing_px', 80)
+        self.colorbar_width_px = state.get('colorbar_width_px', 30)
 
         unit_str = state.get('unit_system', 'MKS')
         self.unit_system = UnitSystem(unit_str)
@@ -332,10 +345,11 @@ class GlobalSettings(QDialog):
         """Load current settings values into dialog widgets."""
         self._left_spin.setValue(self.left_margin_px)
         self._right_image_axis_spin.setValue(self.right_margin_image_axis_px)
-        self._right_colorbar_spin.setValue(self.right_margin_colorbar_px)
         self._right_colorbar_label_spin.setValue(self.right_margin_colorbar_label_px)
         self._top_spin.setValue(self.top_margin_px)
         self._bottom_spin.setValue(self.bottom_margin_px)
+        self._subplot_spacing_spin.setValue(self.subplot_spacing_px)
+        self._colorbar_width_spin.setValue(self.colorbar_width_px)
         self._unit_combo.setCurrentText(self.unit_system.value)
 
     def _on_accepted(self) -> None:
@@ -352,8 +366,9 @@ class GlobalSettings(QDialog):
         """Apply widget values to settings data."""
         self.left_margin_px = self._left_spin.value()
         self.right_margin_image_axis_px = self._right_image_axis_spin.value()
-        self.right_margin_colorbar_px = self._right_colorbar_spin.value()
         self.right_margin_colorbar_label_px = self._right_colorbar_label_spin.value()
         self.top_margin_px = self._top_spin.value()
         self.bottom_margin_px = self._bottom_spin.value()
+        self.subplot_spacing_px = self._subplot_spacing_spin.value()
+        self.colorbar_width_px = self._colorbar_width_spin.value()
         self.unit_system = UnitSystem(self._unit_combo.currentText())
