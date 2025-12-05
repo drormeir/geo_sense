@@ -43,7 +43,20 @@ class GlobalSettings(QDialog):
     """
 
     _instance = None
+    _initialized = False
+    margin_prefix: str = 'margin_px_'
+    margins_px: dict[str, int] = {
+        'base_vertical': 20,
+        'horizontal_axes': 30,
+        'base_horizontal': 10,
+        'vertical_axes': 70,
+        'colorbar_width': 30,
+    }
 
+    unit_system: UnitSystem = UnitSystem.MKS
+    unit_system_prefix: str = 'unit_system'
+    unit_system_options: list[str] = ["MKS", "Imperial"]
+    
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(GlobalSettings, cls).__new__(cls)
@@ -54,22 +67,6 @@ class GlobalSettings(QDialog):
         """Initialize default settings and dialog UI if not already initialized."""
         if self._initialized:
             return
-
-        # Plot margin settings (in pixels)
-        self.left_margin_px: int = 60
-        self.right_margin_image_axis_px: int = 60      # Space for right image axis labels
-        self.right_margin_colorbar_label_px: int = 50  # Space for "Amplitude" label on colorbar
-        self.top_margin_px: int = 40
-        self.bottom_margin_px: int = 50
-
-        # Subplot spacing (for GridSpec wspace between image and colorbar)
-        self.subplot_spacing_px: int = 80  # Horizontal space between image and colorbar subplots
-
-        # Colorbar dimensions
-        self.colorbar_width_px: int = 30  # Width of the colorbar itself
-
-        # Unit system
-        self.unit_system: UnitSystem = UnitSystem.MKS
 
         # Observer pattern - list of listener callbacks
         self._listeners: list[Callable[[], None]] = []
@@ -84,63 +81,6 @@ class GlobalSettings(QDialog):
         """Get the singleton instance of GlobalSettings (internal use only)."""
         return cls()
 
-    # ========== Public Class Methods (Namespace-style API) ==========
-
-    @classmethod
-    def get_left_margin_px(cls) -> int:
-        """Get left margin in pixels."""
-        return cls._get_instance().left_margin_px
-
-    @classmethod
-    def get_right_margin_image_axis_px(cls) -> int:
-        """Get right image axis margin in pixels."""
-        return cls._get_instance().right_margin_image_axis_px
-
-    @classmethod
-    def get_right_margin_colorbar_label_px(cls) -> int:
-        """Get right colorbar label margin in pixels."""
-        return cls._get_instance().right_margin_colorbar_label_px
-
-    @classmethod
-    def get_top_margin_px(cls) -> int:
-        """Get top margin in pixels."""
-        return cls._get_instance().top_margin_px
-
-    @classmethod
-    def get_bottom_margin_px(cls) -> int:
-        """Get bottom margin in pixels."""
-        return cls._get_instance().bottom_margin_px
-
-    @classmethod
-    def get_subplot_spacing_px(cls) -> int:
-        """Get subplot spacing in pixels."""
-        return cls._get_instance().subplot_spacing_px
-
-    @classmethod
-    def get_colorbar_width_px(cls) -> int:
-        """Get colorbar width in pixels."""
-        return cls._get_instance().colorbar_width_px
-
-    @classmethod
-    def get_unit_system(cls) -> UnitSystem:
-        """Get the current unit system."""
-        return cls._get_instance().unit_system
-
-    @classmethod
-    def get_total_right_margin(cls) -> int:
-        """
-        Get total right margin (for single subplot mode only).
-
-        For GridSpec mode with separate colorbar subplot, margins are handled differently.
-        This method is only used when using a single subplot without GridSpec.
-
-        Returns:
-            Total right margin in pixels.
-        """
-        instance = cls._get_instance()
-        return (instance.right_margin_image_axis_px +
-                instance.right_margin_colorbar_label_px +
-                instance.subplot_spacing_px)
 
     @classmethod
     def add_listener(cls, callback: Callable[[], None]) -> None:
@@ -154,6 +94,7 @@ class GlobalSettings(QDialog):
         if callback not in instance._listeners:
             instance._listeners.append(callback)
 
+
     @classmethod
     def remove_listener(cls, callback: Callable[[], None]) -> None:
         """
@@ -166,6 +107,7 @@ class GlobalSettings(QDialog):
         if callback in instance._listeners:
             instance._listeners.remove(callback)
 
+
     @classmethod
     def show_dialog(cls) -> None:
         """Show the global settings dialog."""
@@ -175,6 +117,7 @@ class GlobalSettings(QDialog):
         instance.show()
         instance.raise_()
         instance.activateWindow()
+
 
     @classmethod
     def create_action(cls, settings_menu: QMenu, parent: QWidget, label: str = "&Global Settings...") -> QAction:
@@ -194,6 +137,7 @@ class GlobalSettings(QDialog):
         settings_menu.addAction(action)
         return action
 
+
     @classmethod
     def serialize(cls) -> dict[str, Any]:
         """
@@ -202,7 +146,16 @@ class GlobalSettings(QDialog):
         Returns:
             Dictionary containing all settings.
         """
-        return cls._get_instance()._serialize_instance()
+        """
+        Serialize settings to a dictionary for session persistence.
+
+        Returns:
+            Dictionary containing all settings.
+        """
+        ret = {GlobalSettings.margin_prefix + key: value for key, value in GlobalSettings.margins_px.items()}
+        ret[GlobalSettings.unit_system_prefix] = GlobalSettings.unit_system.value
+        return ret
+
 
     @classmethod
     def deserialize(cls, state: dict[str, Any]) -> None:
@@ -212,7 +165,19 @@ class GlobalSettings(QDialog):
         Args:
             state: Dictionary containing serialized settings.
         """
-        cls._get_instance()._deserialize_instance(state)
+        """
+        Restore settings from a dictionary.
+
+        Args:
+            state: Dictionary containing serialized settings.
+        """
+        for key, value in state.items():
+            if key.startswith(GlobalSettings.margin_prefix):
+                GlobalSettings.margins_px[key[len(GlobalSettings.margin_prefix):]] = value
+
+        if GlobalSettings.unit_system_prefix in state:
+            GlobalSettings.unit_system = UnitSystem(state[GlobalSettings.unit_system_prefix])
+
 
     @classmethod
     def register(cls) -> None:
@@ -225,6 +190,7 @@ class GlobalSettings(QDialog):
         """
         session = SessionManager.get_instance()
         session.register_plugin("global_settings", cls._get_instance())
+
 
     # ========== Internal Instance Methods ==========
 
@@ -240,6 +206,7 @@ class GlobalSettings(QDialog):
         self._create_ui()
         self._ui_initialized = True
 
+
     def _create_ui(self) -> None:
         """Create the dialog UI widgets."""
         # Create layout
@@ -249,33 +216,18 @@ class GlobalSettings(QDialog):
         margins_group = QGroupBox("Plot Margins (pixels)")
         margins_layout = QFormLayout()
 
-        self._left_spin = QSpinBox()
-        self._left_spin.setRange(0, 200)
-        margins_layout.addRow("Left margin:", self._left_spin)
+        self._margin_spins: dict[str, QSpinBox] = {}
+        keys = list(GlobalSettings.margins_px.keys())
+        titles = [key.replace('_', ' ').capitalize() for key in keys]
+        max_length = max(len(title) for title in titles)
+        titles = {key: title.ljust(max_length) for key, title in zip(keys, titles)}
+        for key in keys:
+            spin = QSpinBox()
+            spin.setRange(0, 200)
+            spin.setValue(GlobalSettings.margins_px[key])
+            margins_layout.addRow(titles[key] + ":", spin)
+            self._margin_spins[key] = spin
 
-        self._right_image_axis_spin = QSpinBox()
-        self._right_image_axis_spin.setRange(0, 200)
-        margins_layout.addRow("Right image axis:", self._right_image_axis_spin)
-
-        self._right_colorbar_label_spin = QSpinBox()
-        self._right_colorbar_label_spin.setRange(0, 200)
-        margins_layout.addRow("Right colorbar label:", self._right_colorbar_label_spin)
-
-        self._top_spin = QSpinBox()
-        self._top_spin.setRange(0, 200)
-        margins_layout.addRow("Top margin:", self._top_spin)
-
-        self._bottom_spin = QSpinBox()
-        self._bottom_spin.setRange(0, 200)
-        margins_layout.addRow("Bottom margin:", self._bottom_spin)
-
-        self._subplot_spacing_spin = QSpinBox()
-        self._subplot_spacing_spin.setRange(0, 200)
-        margins_layout.addRow("Subplot spacing:", self._subplot_spacing_spin)
-
-        self._colorbar_width_spin = QSpinBox()
-        self._colorbar_width_spin.setRange(10, 100)
-        margins_layout.addRow("Colorbar width:", self._colorbar_width_spin)
 
         margins_group.setLayout(margins_layout)
         layout.addWidget(margins_group)
@@ -285,7 +237,7 @@ class GlobalSettings(QDialog):
         units_layout = QFormLayout()
 
         self._unit_combo = QComboBox()
-        self._unit_combo.addItems(["MKS", "Imperial"])
+        self._unit_combo.addItems(GlobalSettings.unit_system_options)
         units_layout.addRow("Display units:", self._unit_combo)
 
         units_group.setLayout(units_layout)
@@ -297,43 +249,42 @@ class GlobalSettings(QDialog):
         button_box.rejected.connect(self._on_rejected)
         layout.addWidget(button_box)
 
-    def _serialize_instance(self) -> dict[str, Any]:
-        """
-        Serialize settings to a dictionary for session persistence.
+        # Connect all spin boxes to live update
+        self._connect_live_updates()
 
-        Returns:
-            Dictionary containing all settings.
-        """
-        return {
-            'left_margin_px': self.left_margin_px,
-            'right_margin_image_axis_px': self.right_margin_image_axis_px,
-            'right_margin_colorbar_label_px': self.right_margin_colorbar_label_px,
-            'top_margin_px': self.top_margin_px,
-            'bottom_margin_px': self.bottom_margin_px,
-            'subplot_spacing_px': self.subplot_spacing_px,
-            'colorbar_width_px': self.colorbar_width_px,
-            'unit_system': self.unit_system.value,
-        }
 
-    def _deserialize_instance(self, state: dict[str, Any]) -> None:
-        """
-        Restore settings from a dictionary.
+    def _connect_live_updates(self) -> None:
+        """Connect all spin boxes to trigger live updates on value change."""
+        for spin in self._margin_spins.values():
+            spin.valueChanged.connect(self._apply_settings_from_widgets)
+        self._unit_combo.currentTextChanged.connect(self._apply_settings_from_widgets)
 
-        Args:
-            state: Dictionary containing serialized settings.
-        """
-        self.left_margin_px = state.get('left_margin_px', 60)
-        self.right_margin_image_axis_px = state.get('right_margin_image_axis_px', 60)
-        self.right_margin_colorbar_label_px = state.get('right_margin_colorbar_label_px', 50)
-        self.top_margin_px = state.get('top_margin_px', 40)
-        self.bottom_margin_px = state.get('bottom_margin_px', 50)
-        self.subplot_spacing_px = state.get('subplot_spacing_px', 80)
-        self.colorbar_width_px = state.get('colorbar_width_px', 30)
 
-        unit_str = state.get('unit_system', 'MKS')
-        self.unit_system = UnitSystem(unit_str)
+    def _load_settings_to_widgets(self) -> None:
+        """Load current settings values into dialog widgets."""
+        for key, value in GlobalSettings.margins_px.items():
+            self._margin_spins[key].setValue(value)
+        self._unit_combo.setCurrentText(GlobalSettings.unit_system.value)
 
-    def _notify_listeners(self) -> None:
+
+    def _on_accepted(self) -> None:
+        """Handle OK button - apply settings and notify listeners."""
+        self._apply_settings_from_widgets()
+        self.hide()
+
+
+    def _on_rejected(self) -> None:
+        """Handle Cancel button - just hide without applying."""
+        self.hide()
+
+
+    def _apply_settings_from_widgets(self) -> None:
+        """Apply widget values to settings data."""
+        if not self.isVisible():
+            return
+        for key, spin in self._margin_spins.items():
+            GlobalSettings.margins_px[key] = spin.value()
+        GlobalSettings.unit_system = UnitSystem(self._unit_combo.currentText())
         """Notify all registered listeners that settings have changed."""
         for callback in self._listeners:
             try:
@@ -341,34 +292,3 @@ class GlobalSettings(QDialog):
             except Exception as e:
                 print(f"Error notifying listener: {e}")
 
-    def _load_settings_to_widgets(self) -> None:
-        """Load current settings values into dialog widgets."""
-        self._left_spin.setValue(self.left_margin_px)
-        self._right_image_axis_spin.setValue(self.right_margin_image_axis_px)
-        self._right_colorbar_label_spin.setValue(self.right_margin_colorbar_label_px)
-        self._top_spin.setValue(self.top_margin_px)
-        self._bottom_spin.setValue(self.bottom_margin_px)
-        self._subplot_spacing_spin.setValue(self.subplot_spacing_px)
-        self._colorbar_width_spin.setValue(self.colorbar_width_px)
-        self._unit_combo.setCurrentText(self.unit_system.value)
-
-    def _on_accepted(self) -> None:
-        """Handle OK button - apply settings and notify listeners."""
-        self._apply_settings_from_widgets()
-        self._notify_listeners()
-        self.hide()
-
-    def _on_rejected(self) -> None:
-        """Handle Cancel button - just hide without applying."""
-        self.hide()
-
-    def _apply_settings_from_widgets(self) -> None:
-        """Apply widget values to settings data."""
-        self.left_margin_px = self._left_spin.value()
-        self.right_margin_image_axis_px = self._right_image_axis_spin.value()
-        self.right_margin_colorbar_label_px = self._right_colorbar_label_spin.value()
-        self.top_margin_px = self._top_spin.value()
-        self.bottom_margin_px = self._bottom_spin.value()
-        self.subplot_spacing_px = self._subplot_spacing_spin.value()
-        self.colorbar_width_px = self._colorbar_width_spin.value()
-        self.unit_system = UnitSystem(self._unit_combo.currentText())

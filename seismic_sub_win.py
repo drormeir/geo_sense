@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
 from matplotlib.backend_bases import NavigationToolbar2
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import matplotlib.gridspec as gridspec
 from uas import UASSubWindow, UASMainWindow, auto_register
 
 import segyio
@@ -25,21 +24,31 @@ class DisplaySettingsDialog(QDialog):
     """
     Dialog for configuring display axis settings for each border.
     """
+    default_settings = {
+        'top': 'None',
+        'bottom': 'Distance',
+        'left': 'Sample',
+        'right': 'None',
+        'colormap': 'seismic',
+        'flip_colormap': False,
+        'colorbar_visible': True,
+        'file_name_in_plot': True,
+    }
+    colormap_options = ["seismic", "gray", "viridis", "plasma", "RdBu", "hot", "coolwarm", "jet"]
+    vertical_options = ["None", "Sample", "Time", "Depth"]
+    horizontal_options = ["None", "Distance", "Trace sample"]
 
-    def __init__(self, parent=None, current_settings=None):
+
+    def __init__(self, parent: 'SeismicSubWindow', current_settings: dict[str, Any]|None = None):
         super().__init__(parent)
         self.setWindowTitle("Display Settings")
+        self._parent = parent
+        self._old_settings = dict(current_settings) if current_settings else dict(self.default_settings)
 
-        # Default settings
         if current_settings is None:
-            current_settings = {
-                'top': 'None',
-                'bottom': 'Distance',
-                'left': 'Sample',
-                'right': 'None',
-                'colormap': 'seismic',
-                'flip_colormap': False
-            }
+            current_settings = self.default_settings
+        else:
+            current_settings = {**self.default_settings, **current_settings}
 
         # Create layout
         layout = QVBoxLayout(self)
@@ -48,29 +57,31 @@ class DisplaySettingsDialog(QDialog):
         form_layout = QFormLayout()
 
         # Top and Bottom borders (horizontal)
-        horizontal_options = ["None", "Distance", "Trace sample"]
 
         self.top_combo = QComboBox()
-        self.top_combo.addItems(horizontal_options)
-        self.top_combo.setCurrentText(current_settings.get('top', 'None'))
+        self.top_combo.addItems(DisplaySettingsDialog.horizontal_options)
+        self.top_combo.setCurrentText(current_settings['top'])
+        self.top_combo.currentIndexChanged.connect(self._on_setting_changed)
         form_layout.addRow("Top border:", self.top_combo)
 
         self.bottom_combo = QComboBox()
-        self.bottom_combo.addItems(horizontal_options)
-        self.bottom_combo.setCurrentText(current_settings.get('bottom', 'Distance'))
+        self.bottom_combo.addItems(DisplaySettingsDialog.horizontal_options)
+        self.bottom_combo.setCurrentText(current_settings['bottom'])
+        self.bottom_combo.currentIndexChanged.connect(self._on_setting_changed)
         form_layout.addRow("Bottom border:", self.bottom_combo)
 
         # Left and Right borders (vertical)
-        vertical_options = ["None", "Sample", "Time", "Depth"]
 
         self.left_combo = QComboBox()
-        self.left_combo.addItems(vertical_options)
-        self.left_combo.setCurrentText(current_settings.get('left', 'Sample'))
+        self.left_combo.addItems(DisplaySettingsDialog.vertical_options)
+        self.left_combo.setCurrentText(current_settings['left'])
+        self.left_combo.currentIndexChanged.connect(self._on_setting_changed)
         form_layout.addRow("Left border:", self.left_combo)
 
         self.right_combo = QComboBox()
-        self.right_combo.addItems(vertical_options)
-        self.right_combo.setCurrentText(current_settings.get('right', 'None'))
+        self.right_combo.addItems(DisplaySettingsDialog.vertical_options)
+        self.right_combo.setCurrentText(current_settings['right'])
+        self.right_combo.currentIndexChanged.connect(self._on_setting_changed)
         form_layout.addRow("Right border:", self.right_combo)
 
         layout.addLayout(form_layout)
@@ -80,16 +91,29 @@ class DisplaySettingsDialog(QDialog):
         colormap_layout = QFormLayout()
 
         # Common colormaps
-        colormap_options = ["seismic", "gray", "viridis", "plasma", "RdBu", "hot", "coolwarm", "jet"]
         self.colormap_combo = QComboBox()
-        self.colormap_combo.addItems(colormap_options)
-        self.colormap_combo.setCurrentText(current_settings.get('colormap', 'seismic'))
+        self.colormap_combo.addItems(DisplaySettingsDialog.colormap_options)
+        self.colormap_combo.setCurrentText(current_settings['colormap'])
+        self.colormap_combo.currentIndexChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("Color scheme:", self.colormap_combo)
 
         # Flip colormap checkbox
         self.flip_colormap_checkbox = QCheckBox("Flip colormap")
-        self.flip_colormap_checkbox.setChecked(current_settings.get('flip_colormap', False))
+        self.flip_colormap_checkbox.setChecked(current_settings['flip_colormap'])
+        self.flip_colormap_checkbox.stateChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("", self.flip_colormap_checkbox)
+
+        # Colorbar visible checkbox
+        self.colorbar_visible_checkbox = QCheckBox("Show Colorbar")
+        self.colorbar_visible_checkbox.setChecked(current_settings['colorbar_visible'])
+        self.colorbar_visible_checkbox.stateChanged.connect(self._on_setting_changed)
+        colormap_layout.addRow("", self.colorbar_visible_checkbox)
+
+        # File name in plot checkbox
+        self.file_name_in_plot_checkbox = QCheckBox("Show file name in plot")
+        self.file_name_in_plot_checkbox.setChecked(current_settings['file_name_in_plot'])
+        self.file_name_in_plot_checkbox.stateChanged.connect(self._on_setting_changed)
+        colormap_layout.addRow("", self.file_name_in_plot_checkbox)
 
         colormap_group.setLayout(colormap_layout)
         layout.addWidget(colormap_group)
@@ -100,6 +124,32 @@ class DisplaySettingsDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
+
+    def _on_setting_changed(self):
+        """Called when any setting changes - update parent display immediately."""
+        new_settings = self.get_settings()
+        old_colorbar = self._old_settings.get('colorbar_visible', True)
+        new_colorbar = new_settings.get('colorbar_visible', True)
+
+        # Update parent's settings
+        self._parent._display_settings = new_settings
+
+        # If colorbar visibility changed, need to recreate subplots
+        if old_colorbar != new_colorbar:
+            self._parent._recreate_subplots()
+        else:
+            # Otherwise just re-render
+            self._parent.canvas_render()
+
+        # Update old settings for next comparison
+        self._old_settings = dict(new_settings)
+
+    def reject(self):
+        """Restore old settings when dialog is cancelled."""
+        self._parent._display_settings = self._old_settings
+        self._parent.canvas_render()
+        super().reject()
+
     def get_settings(self):
         """Return the selected settings as a dictionary."""
         return {
@@ -108,7 +158,9 @@ class DisplaySettingsDialog(QDialog):
             'left': self.left_combo.currentText(),
             'right': self.right_combo.currentText(),
             'colormap': self.colormap_combo.currentText(),
-            'flip_colormap': self.flip_colormap_checkbox.isChecked()
+            'flip_colormap': self.flip_colormap_checkbox.isChecked(),
+            'colorbar_visible': self.colorbar_visible_checkbox.isChecked(),
+            'file_name_in_plot': self.file_name_in_plot_checkbox.isChecked()
         }
 
 
@@ -159,14 +211,7 @@ class SeismicSubWindow(UASSubWindow):
         self._sticky_horizontal_edges: bool = False
 
         # Display settings
-        self._display_settings = {
-            'top': 'None',
-            'bottom': 'Distance',
-            'left': 'Sample',
-            'right': 'None',
-            'colormap': 'seismic',
-            'flip_colormap': False
-        }
+        self._display_settings: dict[str, Any] = dict(DisplaySettingsDialog.default_settings)
 
         # Create shared zoom menu
         self._zoom_menu = None
@@ -175,33 +220,7 @@ class SeismicSubWindow(UASSubWindow):
         self.title = "Seismic View"
         self._fig = Figure(figsize=(10, 6))
 
-        # Use separate subplots for image and colorbar
-        # GridSpec approach with proper wspace handling for right axis
-        self._use_separate_colorbar_subplot = True
-
-        # Colorbar sizing parameters (easy to customize)
-        self._colorbar_width_ratio = 1      # Colorbar width relative to image (image:colorbar = 20:1)
-        self._image_width_ratio = 20        # Image width relative to colorbar
-
-        if self._use_separate_colorbar_subplot:
-            # Create GridSpec: image takes most space, colorbar is narrow
-            # Note: We'll set margins and wspace later via _adjust_layout_with_fixed_margins
-            gs = gridspec.GridSpec(
-                1, 2,
-                figure=self._fig,
-                width_ratios=[self._image_width_ratio, self._colorbar_width_ratio],
-                wspace=0.05,  # Will be updated dynamically based on right axis visibility
-                # Initial margins (will be updated by _adjust_layout_with_fixed_margins)
-                left=0.1, right=0.9, top=0.95, bottom=0.1
-            )
-            self._axes = self._fig.add_subplot(gs[0])
-            self._colorbar_axes = self._fig.add_subplot(gs[1])
-            self._gridspec = gs  # Keep reference to update margins later
-        else:
-            self._axes = self._fig.add_subplot(111)
-            self._colorbar_axes = None
-            self._gridspec = None
-
+        self.create_subplots()
         self._canvas = FigureCanvasQTAgg(self._fig)
 
         # Create toolbar
@@ -232,6 +251,7 @@ class SeismicSubWindow(UASSubWindow):
 
         # Register as listener for global settings changes
         GlobalSettings.add_listener(self._on_global_settings_changed)
+
 
     def _show_error(self, title: str, message: str) -> None:
         """Show error message by rendering it on the matplotlib canvas.
@@ -274,6 +294,7 @@ class SeismicSubWindow(UASSubWindow):
 
         # Redraw canvas
         self._canvas.draw()
+
 
     def _setup_toolbar(self) -> None:
         """Set up the toolbar with zoom toggle button."""
@@ -493,16 +514,13 @@ class SeismicSubWindow(UASSubWindow):
 
     def _motion_notify_event(self, event) -> None:
         """Handle mouse motion to show amplitude indicator on colorbar."""
-        amplitude = None
         hover_info = None
         if event is not None and event.xdata is not None and event.ydata is not None:
             # Get pixel coordinates
             x, y = int(round(event.xdata)), int(round(event.ydata))
             hover_info = self.get_hover_info(x, y)
-            data = self._data
-            if data is not None:
-                if (0 <= y < data.shape[0] and 0 <= x < data.shape[1]):
-                    amplitude = data[y, x]
+
+        amplitude = hover_info.get('amplitude', None) if hover_info is not None else None
         self._update_colorbar_indicator(amplitude)
         self._main_window.on_subwindow_hover(hover_info)
 
@@ -534,18 +552,6 @@ class SeismicSubWindow(UASSubWindow):
         self._canvas.draw_idle()
 
 
-    def remove_colorbar_indicator(self) -> None:
-        if self._colorbar_indicator is None:
-            return
-        self._colorbar_indicator.remove()
-        self._colorbar_indicator = None
-
-    def remove_colorbar(self) -> None:
-        if self._colorbar is None:
-            return
-        self._colorbar.remove()
-        self._colorbar = None
-
     def get_hover_info(self, x: int, y: int) -> dict[str, Any] | None:
         """
         Calculate hover information for given pixel coordinates.
@@ -573,6 +579,7 @@ class SeismicSubWindow(UASSubWindow):
             'depth_time_value': absolute_value,
             'depth_time_unit': self._sample_unit,
             'is_depth': self._is_depth,  # True = depth, False = time
+            'amplitude': self._data[y, x],
         }
 
         # Calculate horizontal distance
@@ -796,73 +803,11 @@ class SeismicSubWindow(UASSubWindow):
         """Render the seismic data to the canvas."""
         if self._data is None:
             return
-        self.remove_colorbar_indicator()
         self.remove_colorbar()
+        self.remove_colorbar_indicator()
 
         self._axes.clear()
 
-        # Get colormap from display settings
-        colormap = self._display_settings.get('colormap', 'seismic')
-        flip_colormap = self._display_settings.get('flip_colormap', False)
-
-        # Add '_r' suffix to flip the colormap
-        if flip_colormap:
-            colormap = colormap + '_r'
-
-        self._image = self._axes.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
-
-        # Create colorbar in separate subplot or attached axis
-        if self._use_separate_colorbar_subplot and self._colorbar_axes is not None:
-            # wspace is the horizontal spacing between subplots as a fraction of average subplot width
-            # When right axis is visible, we need extra space for the axis labels
-            right_axis_visible = self._display_settings.get('right', 'None') != 'None'
-
-            # Calculate wspace based on right axis visibility
-            # wspace = horizontal_space / average_subplot_width
-            # For width_ratios=[20, 1], average width = (20+1)/2 = 10.5 units
-            if right_axis_visible:
-                # Need space for right axis tick labels
-                # Use a very large wspace value to create gap for axis labels + some buffer
-                self._gridspec.update(wspace=0.8)  # 80% of average subplot width
-            else:
-                # Smaller spacing when no right axis
-                self._gridspec.update(wspace=0.1)  # 10% of average subplot width
-
-            # Use the separate subplot for colorbar
-            self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude")
-
-            # DEBUG: Visualize subplot boundaries with background colors
-            # self._axes.set_facecolor((1.0, 1.0, 0.8, 0.3))  # Image subplot - light yellow transparent
-            # self._colorbar_axes.set_facecolor((0.8, 0.8, 1.0, 0.3))  # Colorbar subplot - light blue transparent
-        else:
-            # Create a dedicated axis for the colorbar positioned after the right axis
-            # Get settings to calculate colorbar position
-            right_axis_visible = self._display_settings.get('right', 'None') != 'None'
-
-            # Calculate colorbar width as a fraction of the total figure width
-            width_px = self._fig.get_figwidth() * self._fig.dpi
-            colorbar_width_fraction = GlobalSettings.get_right_margin_colorbar_px() / width_px
-
-            # Calculate pad (space between axes and colorbar) based on right axis visibility
-            if right_axis_visible:
-                # If right axis is visible, position colorbar after it
-                # Need extra space for axis labels that extend beyond the spine
-                pad_px = GlobalSettings.get_right_margin_image_axis_px() + 60  # Add 60px for tick labels
-            else:
-                # If no right axis, minimal padding
-                pad_px = 10
-
-            pad_fraction = pad_px / width_px
-
-            # Create colorbar with calculated positioning
-            divider = make_axes_locatable(self._axes)
-            cax = divider.append_axes("right", size=f"{colorbar_width_fraction*100}%", pad=pad_fraction)
-            self._colorbar = self._fig.colorbar(self._image, cax=cax, label="Amplitude")
-
-        self._colorbar_indicator = None  # Reset indicator on re-render
-        self._axes.set_xlabel("Trace Number")
-        self._axes.set_ylabel("Sample Number")
-        self._axes.set_title(os.path.basename(self._filename))
         self._apply_display_settings()
         self._adjust_layout_with_fixed_margins()
 
@@ -879,140 +824,124 @@ class SeismicSubWindow(UASSubWindow):
 
     def _adjust_layout_with_fixed_margins(self) -> None:
         """Adjust figure layout with fixed pixel margins from global settings."""
-        # Get margins from global settings
-        left_margin_px = GlobalSettings.get_left_margin_px()
-        top_margin_px = GlobalSettings.get_top_margin_px()
-        bottom_margin_px = GlobalSettings.get_bottom_margin_px()
 
         # Get figure size in pixels
         width_px = self._fig.get_figwidth() * self._fig.dpi
         height_px = self._fig.get_figheight() * self._fig.dpi
 
         # Convert pixels to proportions
-        left = left_margin_px / width_px
+        horizontal_axes_margin_px = GlobalSettings.margins_px['horizontal_axes']
+        vertical_axes_margin_px = GlobalSettings.margins_px['vertical_axes']
+        base_vertical_margin_px = GlobalSettings.margins_px['base_vertical']
+        base_horizontal_margin_px = GlobalSettings.margins_px['base_horizontal']
+
+        top_margin_px = base_vertical_margin_px
+        if self._display_settings.get('top', 'None') != 'None':
+            top_margin_px += horizontal_axes_margin_px
+        if self._display_settings.get('file_name_in_plot', True):
+            top_margin_px += base_vertical_margin_px
+
+        bottom_margin_px = base_vertical_margin_px
+        if self._display_settings.get('bottom', 'None') != 'None':
+            bottom_margin_px += horizontal_axes_margin_px
+
         bottom = bottom_margin_px / height_px
-        top = 1.0 - (top_margin_px / height_px)
+        height = 1.0 - (top_margin_px + bottom_margin_px) / height_px
 
-        # Apply the margins
-        if self._use_separate_colorbar_subplot and self._gridspec is not None:
-            # For separate subplots: colorbar is in its own subplot (gs[1])
-            # Check if right axis is visible on the image subplot
-            right_axis_visible = self._display_settings.get('right', 'None') != 'None'
+        left_image_margin_px = base_horizontal_margin_px
+        if self._display_settings.get('left', 'None') != 'None':
+            left_image_margin_px += vertical_axes_margin_px
 
-            # Calculate wspace (horizontal space between image and colorbar subplots)
-            # This space is needed for right axis labels if present
-            subplot_spacing_px = GlobalSettings.get_subplot_spacing_px()
-            wspace = subplot_spacing_px / width_px  # Convert pixels to figure fraction
+        right_image_margin_px = base_horizontal_margin_px
+        if self._display_settings.get('right', 'None') != 'None':
+            right_image_margin_px += vertical_axes_margin_px
 
-            # GridSpec right margin: always use a minimal value, since we'll adjust subplots individually
-            # Use a fixed small margin just to prevent elements touching the absolute edge
-            right_margin_px = 10  # Fixed minimal margin
-            right = 1.0 - (right_margin_px / width_px)
+        if self._display_settings.get('colorbar_visible', True):
+            colorbar_width_px = GlobalSettings.margins_px['colorbar_width']
+            colorbar_right_margin_px = vertical_axes_margin_px + base_horizontal_margin_px
+            colorbar_left_margin_px = colorbar_width_px + colorbar_right_margin_px
+            colorbar_left = 1 - colorbar_left_margin_px / width_px
+            colorbar_width = colorbar_width_px / width_px
+            self._colorbar_axes.set_position([colorbar_left, bottom, colorbar_width, height])
+            right_image_margin_px += colorbar_left_margin_px
 
-            # Update GridSpec margins and wspace
-            self._gridspec.update(left=left, right=right, top=top, bottom=bottom, wspace=wspace)
 
-            # MANUALLY ADJUST IMAGE AXES: Shrink to leave room for right axis labels
-            # GridSpec creates the axes positions, but right axis labels extend outside the axes boundary
-            if right_axis_visible:
-                # Get GridSpec-defined position for image subplot
-                gs0_bounds = self._gridspec[0].get_position(self._fig)
-
-                # Calculate how much to shrink from the right side
-                right_axis_space_px = GlobalSettings.get_right_margin_image_axis_px()
-                right_shrink = right_axis_space_px / width_px
-
-                # Set new position: shrink width from the right side
-                self._axes.set_position([
-                    gs0_bounds.x0,
-                    gs0_bounds.y0,
-                    gs0_bounds.width - right_shrink,
-                    gs0_bounds.height
-                ])
-            else:
-                # No right axis, use full GridSpec-defined width
-                gs0_bounds = self._gridspec[0].get_position(self._fig)
-                self._axes.set_position([gs0_bounds.x0, gs0_bounds.y0, gs0_bounds.width, gs0_bounds.height])
-
-            # MANUALLY ADJUST COLORBAR AXES: Set fixed width and position to leave room for "Amplitude" label
-            gs1_bounds = self._gridspec[1].get_position(self._fig)
-
-            # Get the desired colorbar width in pixels and convert to figure fraction
-            colorbar_width_px = GlobalSettings.get_colorbar_width_px()
-            colorbar_width_frac = colorbar_width_px / width_px
-
-            # The colorbar should be aligned to the right side of its GridSpec cell, minus the label space
-            colorbar_label_space_px = GlobalSettings.get_right_margin_colorbar_label_px()
-            colorbar_label_space_frac = colorbar_label_space_px / width_px
-
-            # Calculate the left position: start from right edge, subtract label space and colorbar width
-            colorbar_right_edge = gs1_bounds.x1 - colorbar_label_space_frac
-            colorbar_left = colorbar_right_edge - colorbar_width_frac
-
-            self._colorbar_axes.set_position([
-                colorbar_left,
-                gs1_bounds.y0,
-                colorbar_width_frac,
-                gs1_bounds.height
-            ])
-        else:
-            # For single subplot: right margin includes everything
-            right_margin_px = GlobalSettings.get_total_right_margin()
-            right = 1.0 - (right_margin_px / width_px)
-
-            # Use regular subplots_adjust for old method
-            self._fig.subplots_adjust(left=left, right=right, top=top, bottom=bottom)
+        image_left = left_image_margin_px / width_px
+        image_width = 1.0 - (left_image_margin_px + right_image_margin_px) / width_px
+        self._axes.set_position([image_left, bottom, image_width, height])
+        self._canvas.draw_idle()
 
 
     def _on_global_settings_changed(self) -> None:
         """Callback when global settings change - update the layout."""
-        if self._data is not None:
-            self._adjust_layout_with_fixed_margins()
-            self._canvas.draw_idle()
+        if self._data is None:
+            return
+        self._adjust_layout_with_fixed_margins()
+        self._canvas.draw_idle()
 
-    def set_colorbar_width_ratio(self, ratio: float) -> None:
-        """
-        Set the colorbar width relative to the image.
 
-        Args:
-            ratio: Width ratio (e.g., 1.0 means image:colorbar = 20:1)
-        """
-        self._colorbar_width_ratio = ratio
-        self._recreate_subplots()
+    def _on_local_settings_changed(self) -> None:
+        """Callback when local settings change - update the layout."""
+        if self._data is None:
+            return
+        self._apply_display_settings()
+        self._adjust_layout_with_fixed_margins()
+        self._canvas.draw_idle()
 
-    def set_colorbar_spacing(self, spacing: float) -> None:
-        """
-        Set the horizontal spacing between image and colorbar.
-
-        Args:
-            spacing: Spacing as fraction of figure width (0.0 to 1.0)
-        """
-        self._colorbar_spacing = spacing
-        self._recreate_subplots()
 
     def _recreate_subplots(self) -> None:
         """Recreate subplots with updated parameters."""
-        if not self._use_separate_colorbar_subplot:
-            return
 
         # Clear existing subplots
         self._fig.clear()
 
-        # Recreate GridSpec with new parameters
-        gs = gridspec.GridSpec(
-            1, 2,
-            figure=self._fig,
-            width_ratios=[self._image_width_ratio, self._colorbar_width_ratio],
-            wspace=self._colorbar_spacing,
-            left=0.1, right=0.9, top=0.95, bottom=0.1
-        )
-        self._axes = self._fig.add_subplot(gs[0])
-        self._colorbar_axes = self._fig.add_subplot(gs[1])
-        self._gridspec = gs  # Keep reference
-
+        self.create_subplots()
         # Re-render if we have data
         if self._data is not None:
             self.canvas_render()
+
+
+    def create_subplots(self) -> None:
+        # Note: We'll set margins and wspace later via _adjust_layout_with_fixed_margins
+        self.remove_colorbar_axes()
+        if self._display_settings.get('colorbar_visible', True):
+            self._axes = self._fig.add_subplot(1, 2, 1)
+            self._colorbar_axes = self._fig.add_subplot(1, 2, 2)
+        else:
+            self._axes = self._fig.add_subplot(1, 1, 1)
+            self._colorbar_axes = None
+
+
+    def remove_colorbar_axes(self) -> None:
+        #check if colorbar_axes is defined, if so, remove it
+        if not hasattr(self, '_colorbar_axes'):
+            self._colorbar_axes = None
+            return
+        if self._colorbar_axes is None:
+            return
+        self.remove_colorbar()
+        if self._colorbar_axes.figure is self._fig and self._colorbar_axes in self._fig.axes:
+            self._colorbar_axes.remove()
+        self._colorbar_axes = None
+
+
+    def remove_colorbar(self) -> None:
+        if self._colorbar is None:
+            return
+        self.remove_colorbar_indicator()
+
+        # Only remove if the colorbar's axes is still in the figure
+        if self._colorbar.ax.figure is self._fig and self._colorbar.ax in self._fig.axes:
+            self._colorbar.remove()
+        self._colorbar = None
+
+
+    def remove_colorbar_indicator(self) -> None:
+        if self._colorbar_indicator is None:
+            return        
+        self._colorbar_indicator.set_visible(False)
+        self._colorbar_indicator = None
+
 
     def closeEvent(self, event) -> None:
         """Handle window close event - unregister from global settings."""
@@ -1021,28 +950,43 @@ class SeismicSubWindow(UASSubWindow):
 
 
     def _show_display_settings(self) -> None:
-        """Show the display settings dialog and apply changes."""
-        dialog = DisplaySettingsDialog(self, self._display_settings)
-        if dialog.exec() == QDialog.Accepted:
-            old_colormap = self._display_settings.get('colormap', 'seismic')
-            old_flip = self._display_settings.get('flip_colormap', False)
-            self._display_settings = dialog.get_settings()
-            new_colormap = self._display_settings.get('colormap', 'seismic')
-            new_flip = self._display_settings.get('flip_colormap', False)
+        """Show the display settings dialog with live updates (modeless)."""
+        # Check if dialog already exists and is visible
+        if hasattr(self, '_settings_dialog') and self._settings_dialog is not None:
+            # Bring existing dialog to front
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+            return
 
-            # If colormap or flip changed, re-render the entire canvas
-            if old_colormap != new_colormap or old_flip != new_flip:
-                self.canvas_render()
-            else:
-                # Otherwise just update axis settings
-                self._apply_display_settings()
-                self._canvas.draw_idle()
+        # Create and show modeless dialog
+        self._settings_dialog = DisplaySettingsDialog(self, self._display_settings)
+        self._settings_dialog.finished.connect(self._on_settings_dialog_closed)
+        self._settings_dialog.show()
 
+    def _on_settings_dialog_closed(self):
+        """Clean up when settings dialog is closed."""
+        self._settings_dialog = None
 
     def _apply_display_settings(self) -> None:
         """Apply the display settings to the axes."""
         if self._data is None:
             return
+
+        colorbar_visible = self._display_settings.get('colorbar_visible', True)
+        colormap = self._display_settings.get('colormap', 'seismic')
+        flip_colormap = self._display_settings.get('flip_colormap', False)
+        file_name_in_plot = self._display_settings.get('file_name_in_plot', True)
+        # Add '_r' suffix to flip the colormap
+        if flip_colormap:
+            colormap = colormap + '_r'
+
+        self._image = self._axes.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
+        if colorbar_visible:
+            if self._colorbar_axes.figure is self._fig:
+                self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude")
+
+        if file_name_in_plot:
+            self._axes.set_title(os.path.basename(self._filename))
 
         # Get current settings
         top = self._display_settings.get('top', 'None')
@@ -1050,85 +994,91 @@ class SeismicSubWindow(UASSubWindow):
         left = self._display_settings.get('left', 'Sample')
         right = self._display_settings.get('right', 'None')
 
+
+        # remove top and bottom labels
+        self._axes.set_xlabel(None)
+        self._axes.set_ylabel(None)
+        self._axes.secondary_xaxis('top').set_visible(False)
+
         # Apply top axis
         if top == 'None':
             self._axes.xaxis.set_tick_params(top=False, labeltop=False)
-        elif top == 'Distance':
-            self._axes.xaxis.set_tick_params(top=True, labeltop=True)
-            self._axes.set_xlabel("Distance" if self._distance_unit == "m" else "Trace Number", loc='left')
-        elif top == 'Trace sample':
-            self._axes.xaxis.set_tick_params(top=True, labeltop=True)
-            self._axes.set_xlabel("Trace Number", loc='left')
+            self._axes.secondary_xaxis('top').set_visible(False)
+        else:
+            ax2 = self._axes.secondary_xaxis('top')
+            ax2.set_visible(True)
+            ax2.tick_params(axis='x', top=True, labeltop=True)
+            if top == 'Distance':
+                ax2.set_xlabel("Distance" if self._distance_unit == "m" else "Trace Number")
+            elif top == 'Trace sample':
+                ax2.set_xlabel("Trace Number")
 
         # Apply bottom axis
         if bottom == 'None':
             self._axes.xaxis.set_tick_params(bottom=False, labelbottom=False)
-        elif bottom == 'Distance':
+        else:
             self._axes.xaxis.set_tick_params(bottom=True, labelbottom=True)
-            self._axes.set_xlabel("Distance" if self._distance_unit == "m" else "Trace Number")
-        elif bottom == 'Trace sample':
-            self._axes.xaxis.set_tick_params(bottom=True, labelbottom=True)
-            self._axes.set_xlabel("Trace Number")
+            if bottom == 'Distance':
+                self._axes.set_xlabel("Distance" if self._distance_unit == "m" else "Trace Number")
+            elif bottom == 'Trace sample':
+                self._axes.set_xlabel("Trace Number")
 
         # Apply left axis
         if left == 'None':
             self._axes.yaxis.set_tick_params(left=False, labelleft=False)
-        elif left == 'Sample':
+        else:
             self._axes.yaxis.set_tick_params(left=True, labelleft=True)
-            self._axes.set_ylabel("Sample Number")
-        elif left == 'Time':
-            self._axes.yaxis.set_tick_params(left=True, labelleft=True)
-            if self._sample_unit != "sample":
-                # Create labels for time values
-                num_samples = self._data.shape[0]
-                tick_positions = self._axes.get_yticks()
-                # Only keep valid tick positions and create matching labels
-                valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
-                tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}" for pos in valid_ticks]
-                self._axes.set_yticks(valid_ticks)
-                self._axes.set_yticklabels(tick_labels)
-                self._axes.set_ylabel(f"Time ({self._sample_unit})")
-            else:
+
+            if left == 'Sample':
                 self._axes.set_ylabel("Sample Number")
-        elif left == 'Depth':
-            self._axes.yaxis.set_tick_params(left=True, labelleft=True)
-            if self._is_depth and self._sample_unit != "sample":
-                # Create labels for depth values
-                num_samples = self._data.shape[0]
-                tick_positions = self._axes.get_yticks()
-                # Only keep valid tick positions and create matching labels
-                valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
-                tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}" for pos in valid_ticks]
-                self._axes.set_yticks(valid_ticks)
-                self._axes.set_yticklabels(tick_labels)
-                self._axes.set_ylabel(f"Depth ({self._sample_unit})")
-            else:
-                self._axes.set_ylabel("Sample Number")
+            elif left == 'Time':
+                if self._sample_unit != "sample":
+                    # Create labels for time values
+                    num_samples = self._data.shape[0]
+                    tick_positions = self._axes.get_yticks()
+                    # Only keep valid tick positions and create matching labels
+                    valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
+                    tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}" for pos in valid_ticks]
+                    self._axes.set_yticks(valid_ticks)
+                    self._axes.set_yticklabels(tick_labels)
+                    self._axes.set_ylabel(f"Time ({self._sample_unit})")
+                else:
+                    self._axes.set_ylabel("Sample Number")
+            elif left == 'Depth':
+                if self._is_depth and self._sample_unit != "sample":
+                    # Create labels for depth values
+                    num_samples = self._data.shape[0]
+                    tick_positions = self._axes.get_yticks()
+                    # Only keep valid tick positions and create matching labels
+                    valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
+                    tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}" for pos in valid_ticks]
+                    self._axes.set_yticks(valid_ticks)
+                    self._axes.set_yticklabels(tick_labels)
+                    self._axes.set_ylabel(f"Depth ({self._sample_unit})")
+                else:
+                    self._axes.set_ylabel("Sample Number")
 
         # Apply right axis
         if right == 'None':
             self._axes.yaxis.set_tick_params(right=False, labelright=False)
-        elif right == 'Sample':
-            self._axes.yaxis.set_tick_params(right=True, labelright=True)
-            # Use secondary y-axis for sample numbers on right
+            self._axes.secondary_yaxis('right').set_visible(False)
+        else:
             ax2 = self._axes.secondary_yaxis('right')
-            ax2.set_ylabel("Sample Number")
-        elif right == 'Time':
-            self._axes.yaxis.set_tick_params(right=True, labelright=True)
-            if self._sample_unit != "sample":
-                ax2 = self._axes.secondary_yaxis('right')
-                ax2.set_ylabel(f"Time ({self._sample_unit})")
-            else:
-                ax2 = self._axes.secondary_yaxis('right')
+            ax2.set_visible(True)
+            ax2.tick_params(axis='y', right=True, labelright=True)
+            if right == 'Sample':
+                # Use secondary y-axis for sample numbers on right
                 ax2.set_ylabel("Sample Number")
-        elif right == 'Depth':
-            self._axes.yaxis.set_tick_params(right=True, labelright=True)
-            if self._is_depth and self._sample_unit != "sample":
-                ax2 = self._axes.secondary_yaxis('right')
-                ax2.set_ylabel(f"Depth ({self._sample_unit})")
-            else:
-                ax2 = self._axes.secondary_yaxis('right')
-                ax2.set_ylabel("Sample Number")
+            elif right == 'Time':
+                if self._sample_unit != "sample":
+                    ax2.set_ylabel(f"Time ({self._sample_unit})")
+                else:
+                    ax2.set_ylabel("Sample Number")
+            elif right == 'Depth':
+                if self._is_depth and self._sample_unit != "sample":
+                    ax2.set_ylabel(f"Depth ({self._sample_unit})")
+                else:
+                    ax2.set_ylabel("Sample Number")
 
 
     def _save_segy(self) -> None:

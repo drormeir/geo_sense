@@ -181,6 +181,7 @@ class SeismicMainWindow(UASMainWindow):
                 - depth_time_unit: str ('s', 'ms', 'ns', 'm', etc.)
                 - distance_unit: str ('m', 'km', 'trace', etc.)
                 - is_depth: bool (True for depth, False for time)
+                - amplitude: float
         """
         if not hover_info:
             self._status_bar.clearMessage()
@@ -202,6 +203,9 @@ class SeismicMainWindow(UASMainWindow):
             is_depth = hover_info.get('is_depth', False)
             label = "Depth" if is_depth else "Time"
             parts.append(f"{label}: {hover_info['depth_time_value']:.3f} {hover_info['depth_time_unit']}")
+
+        if 'amplitude' in hover_info:
+            parts.append(f"Amplitude: {hover_info['amplitude']:.3f}")
 
         status_message = " | ".join(parts)
         self._status_bar.showMessage(status_message)
