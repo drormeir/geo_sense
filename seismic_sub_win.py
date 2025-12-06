@@ -856,7 +856,7 @@ class SeismicSubWindow(UASSubWindow):
         if self._display_settings.get('right', 'None') != 'None':
             right_image_margin_px += vertical_axes_margin_px
 
-        if self._display_settings.get('colorbar_visible', True):
+        if self.is_colorbar_axes_visible():
             colorbar_width_px = GlobalSettings.margins_px['colorbar_width']
             colorbar_right_margin_px = vertical_axes_margin_px + base_horizontal_margin_px
             colorbar_left_margin_px = colorbar_width_px + colorbar_right_margin_px
@@ -972,7 +972,6 @@ class SeismicSubWindow(UASSubWindow):
         if self._data is None:
             return
 
-        colorbar_visible = self._display_settings.get('colorbar_visible', True)
         colormap = self._display_settings.get('colormap', 'seismic')
         flip_colormap = self._display_settings.get('flip_colormap', False)
         file_name_in_plot = self._display_settings.get('file_name_in_plot', True)
@@ -981,9 +980,8 @@ class SeismicSubWindow(UASSubWindow):
             colormap = colormap + '_r'
 
         self._image = self._axes.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
-        if colorbar_visible:
-            if self._colorbar_axes.figure is self._fig:
-                self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude")
+        if self.is_colorbar_axes_visible():
+            self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude")
 
         if file_name_in_plot:
             self._axes.set_title(os.path.basename(self._filename))
@@ -1079,6 +1077,22 @@ class SeismicSubWindow(UASSubWindow):
                     ax2.set_ylabel(f"Depth ({self._sample_unit})")
                 else:
                     ax2.set_ylabel("Sample Number")
+
+
+    def is_colorbar_axes_visible(self) -> bool:
+        colorbar_visible = self._display_settings.get('colorbar_visible', True) # must check with default value True
+        if not colorbar_visible:
+            self.remove_colorbar_axes()
+            return False
+            
+        if self._colorbar_axes is not None and self._colorbar_axes.figure is not self._fig:
+            self.remove_colorbar_axes()
+        if self._colorbar_axes is None:
+            if len(self._fig.axes) == 1: # if there is only one subplot, add a new subplot for the colorbar
+                self._colorbar_axes = self._fig.add_subplot(1, 2, 2)
+            else:
+                self._colorbar_axes = self._fig.axes[1]
+        return True
 
 
     def _save_segy(self) -> None:

@@ -46,7 +46,7 @@ class GlobalSettings(QDialog):
     _initialized = False
     margin_prefix: str = 'margin_px_'
     margins_px: dict[str, int] = {
-        'base_vertical': 20,
+        'base_vertical': 30,
         'horizontal_axes': 30,
         'base_horizontal': 10,
         'vertical_axes': 70,
