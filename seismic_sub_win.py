@@ -199,6 +199,8 @@ class SeismicSubWindow(UASSubWindow):
         self._trace_coords: np.ndarray | None = None
         self._sample_interval_seconds: float = 1.0
         self._sample_min_seconds: float = 0.0
+        self._z_display_units: str = ""
+        self._z_display_value_factor: float = 1.0
         self._is_depth: bool = False
         self._distance_unit: str = "trace"
 
@@ -568,22 +570,8 @@ class SeismicSubWindow(UASSubWindow):
         # Check bounds
         if not (0 <= y < self._data.shape[0] and 0 <= x < self._data.shape[1]):
             return None
-        assert self._sample_interval_seconds > 0, "sample_interval_seconds must be greater than 0"
-        assert self._sample_min_seconds >= 0, "sample_min_seconds must be greater than or equal to 0"
-        z_range_seconds = self._data.shape[0] * self._sample_interval_seconds
-        z_value_seconds = y * self._sample_interval_seconds - self._sample_min_seconds
-        if z_range_seconds < 0.01:
-            # to nano seconds
-            z_value = z_value_seconds * 1_000_000_000.0
-            z_units = "ns"
-        elif z_value_seconds < 10.0:
-            # to milliseconds
-            z_value = z_value_seconds * 1000.0
-            z_units = "ms"
-        else:
-            # keep in seconds
-            z_value = z_value_seconds
-            z_units = "s"
+        z_value = (y * self._sample_interval_seconds - self._sample_min_seconds) * self._z_display_value_factor
+        z_units = self._z_display_units
 
         hover_info = {
             'trace_number': x,
@@ -812,10 +800,26 @@ class SeismicSubWindow(UASSubWindow):
             self._filename = ""
             ret = False
 
-        if self._sample_min_seconds < 0 or self._sample_min_seconds >= self._data.shape[0] * self._sample_interval_seconds:
+
+        z_range_seconds = self._data.shape[0] * self._sample_interval_seconds
+        if self._sample_min_seconds < 0 or self._sample_min_seconds >= z_range_seconds:
             # default to 10% of the data range
             self._sample_min_seconds = self._data.shape[0] * self._sample_interval_seconds * 0.1
         self._sample_min_seconds = round(self._sample_min_seconds / self._sample_interval_seconds) * self._sample_interval_seconds
+        if z_range_seconds < 0.01:
+            # to nano seconds
+            self._z_display_units = "ns"
+            self._z_display_value_factor = 1_000_000_000.0
+        elif z_range_seconds < 10.0:
+            # to milliseconds
+            self._z_display_units = "ms"
+            self._z_display_value_factor = 1000.0
+        else:
+            # keep in seconds
+            self._z_display_units = "s"
+            self._z_display_value_factor = 1.0
+
+
         self.canvas_render()
         return ret
 
@@ -1054,35 +1058,28 @@ class SeismicSubWindow(UASSubWindow):
             self._axes.yaxis.set_tick_params(left=False, labelleft=False)
         else:
             self._axes.yaxis.set_tick_params(left=True, labelleft=True)
-
-            if left == 'Sample':
+            if left == 'Time' and not self._is_depth:
+                # Create labels for time values
+                num_samples = self._data.shape[0]
+                tick_positions = self._axes.get_yticks()
+                # Only keep valid tick positions and create matching labels
+                valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
+                tick_labels = [f"{(-self._sample_min_seconds + pos * self._sample_interval_seconds) * self._z_display_value_factor:.2f}" for pos in valid_ticks]
+                self._axes.set_yticks(valid_ticks)
+                self._axes.set_yticklabels(tick_labels)
+                self._axes.set_ylabel(f"Time [{self._z_display_units}]")
+            elif left == 'Depth' and self._is_depth:
+                # Create labels for depth values
+                num_samples = self._data.shape[0]
+                tick_positions = self._axes.get_yticks()
+                # Only keep valid tick positions and create matching labels
+                valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
+                tick_labels = [f"{(-self._sample_min_seconds + pos * self._sample_interval_seconds) * self._z_display_value_factor:.2f}" for pos in valid_ticks]
+                self._axes.set_yticks(valid_ticks)
+                self._axes.set_yticklabels(tick_labels)
+                self._axes.set_ylabel(f"Depth [{self._z_display_units}]")
+            else:
                 self._axes.set_ylabel("Sample Number")
-            elif left == 'Time':
-                if self._sample_unit != "sample":
-                    # Create labels for time values
-                    num_samples = self._data.shape[0]
-                    tick_positions = self._axes.get_yticks()
-                    # Only keep valid tick positions and create matching labels
-                    valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
-                    tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}" for pos in valid_ticks]
-                    self._axes.set_yticks(valid_ticks)
-                    self._axes.set_yticklabels(tick_labels)
-                    self._axes.set_ylabel(f"Time ({self._sample_unit})")
-                else:
-                    self._axes.set_ylabel("Sample Number")
-            elif left == 'Depth':
-                if self._is_depth and self._sample_unit != "sample":
-                    # Create labels for depth values
-                    num_samples = self._data.shape[0]
-                    tick_positions = self._axes.get_yticks()
-                    # Only keep valid tick positions and create matching labels
-                    valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
-                    tick_labels = [f"{self._sample_min + pos * self._sample_interval:.2f}" for pos in valid_ticks]
-                    self._axes.set_yticks(valid_ticks)
-                    self._axes.set_yticklabels(tick_labels)
-                    self._axes.set_ylabel(f"Depth ({self._sample_unit})")
-                else:
-                    self._axes.set_ylabel("Sample Number")
 
         # Apply right axis
         if right == 'None':
@@ -1092,20 +1089,13 @@ class SeismicSubWindow(UASSubWindow):
             ax2 = self._axes.secondary_yaxis('right')
             ax2.set_visible(True)
             ax2.tick_params(axis='y', right=True, labelright=True)
-            if right == 'Sample':
+            if right == 'Time' and not self._is_depth:
+                ax2.set_ylabel(f"Time [{self._z_display_units}]")
+            elif right == 'Depth' and self._is_depth:
+                ax2.set_ylabel(f"Depth [{self._z_display_units}]")
+            else:
                 # Use secondary y-axis for sample numbers on right
                 ax2.set_ylabel("Sample Number")
-            elif right == 'Time':
-                if self._sample_unit != "sample":
-                    ax2.set_ylabel(f"Time ({self._sample_unit})")
-                else:
-                    ax2.set_ylabel("Sample Number")
-            elif right == 'Depth':
-                if self._is_depth and self._sample_unit != "sample":
-                    ax2.set_ylabel(f"Depth ({self._sample_unit})")
-                else:
-                    ax2.set_ylabel("Sample Number")
-
 
     def is_colorbar_axes_visible(self) -> bool:
         colorbar_visible = self._display_settings.get('colorbar_visible', True) # must check with default value True
