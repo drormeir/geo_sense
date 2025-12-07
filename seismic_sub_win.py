@@ -197,9 +197,8 @@ class SeismicSubWindow(UASSubWindow):
 
         # Metadata fields
         self._trace_coords: np.ndarray | None = None
-        self._sample_interval: float = 1.0
-        self._sample_unit: str = "sample"
-        self._sample_min: float = 0.0
+        self._sample_interval_seconds: float = 1.0
+        self._sample_min_seconds: float = 0.0
         self._is_depth: bool = False
         self._distance_unit: str = "trace"
 
@@ -569,15 +568,28 @@ class SeismicSubWindow(UASSubWindow):
         # Check bounds
         if not (0 <= y < self._data.shape[0] and 0 <= x < self._data.shape[1]):
             return None
-
-        # Calculate absolute depth/time value: value = min + (sample * interval)
-        absolute_value = self._sample_min + (y * self._sample_interval)
+        assert self._sample_interval_seconds > 0, "sample_interval_seconds must be greater than 0"
+        assert self._sample_min_seconds >= 0, "sample_min_seconds must be greater than or equal to 0"
+        z_range_seconds = self._data.shape[0] * self._sample_interval_seconds
+        z_value_seconds = y * self._sample_interval_seconds - self._sample_min_seconds
+        if z_range_seconds < 0.01:
+            # to nano seconds
+            z_value = z_value_seconds * 1_000_000_000.0
+            z_units = "ns"
+        elif z_value_seconds < 10.0:
+            # to milliseconds
+            z_value = z_value_seconds * 1000.0
+            z_units = "ms"
+        else:
+            # keep in seconds
+            z_value = z_value_seconds
+            z_units = "s"
 
         hover_info = {
             'trace_number': x,
             'sample_number': y,
-            'depth_time_value': absolute_value,
-            'depth_time_unit': self._sample_unit,
+            'z_value': z_value,
+            'z_units': z_units,
             'is_depth': self._is_depth,  # True = depth, False = time
             'amplitude': self._data[y, x],
         }
@@ -698,24 +710,30 @@ class SeismicSubWindow(UASSubWindow):
         if file_type not in ['sgy', 'rd3', 'rd7']:
             self._show_error("Error", f"Invalid file type: {file_type}")
             return False
-
         try:
             if file_type == 'sgy':
                 with segyio.open(filename, "r", ignore_geometry=True) as f:
                     self._data = f.trace.raw[:].T
 
                     # Extract metadata from SEGY file
-                    # Sample interval from binary header (in microseconds)
+                    # Sample interval from binary header (bytes 3217-3218, in microseconds per SEG-Y standard)
                     dt_us = f.bin[segyio.BinField.Interval]
                     if dt_us > 0:
-                        self._sample_interval = dt_us / 1_000_000.0  # Convert to seconds
-                        self._sample_unit = "s"
+                        self._sample_interval_seconds = dt_us / 1_000_000.0  # Convert microseconds to seconds
                     else:
-                        self._sample_interval = 1.0
-                        self._sample_unit = "sample"
+                        self._sample_interval_seconds = 1.0
 
                     # Check if depth or time (assume time by default for SEGY)
                     self._is_depth = False
+
+                    # Extract delay recording time (time of first sample) from first trace header
+                    try:
+                        # DelayRecordingTime from trace header (bytes 109-110, in milliseconds per SEG-Y standard)
+                        delay_ms = f.header[0][segyio.TraceField.DelayRecordingTime]
+                        t0 = delay_ms / 1000.0  # Convert milliseconds to seconds
+                    except Exception as e:
+                        print(f"Error extracting delay recording time: {e}")
+                        self._sample_min_seconds = 0.0
 
                     # Try to extract trace coordinates from trace headers
                     try:
@@ -739,8 +757,6 @@ class SeismicSubWindow(UASSubWindow):
                         self._trace_coords = None
                         self._distance_unit = "trace"
 
-                    self._sample_min = 0.0
-
             else:
                 file_base, _ = os.path.splitext(filename)
                 self._data, info = readMALA(file_base)
@@ -748,17 +764,21 @@ class SeismicSubWindow(UASSubWindow):
 
                 # Extract metadata from MALA header
                 # Calculate sample interval (dt) from TIMEWINDOW and SAMPLES
-                timewindow = float(info.get('TIMEWINDOW', 0))
-                samples = int(info.get('SAMPLES', 1))
-                if timewindow > 0 and samples > 0:
-                    self._sample_interval = timewindow / samples
-                    self._sample_unit = "ns"
+                # TIMEWINDOW is in nanoseconds
+                timewindow_ns = float(info.get('TIMEWINDOW', 0))
+                samples = self._data.shape[0]
+                if timewindow_ns > 0 and samples > 0:
+                    self._sample_interval_seconds = (timewindow_ns / samples) / 1_000_000_000.0  # Convert nanoseconds to seconds
                 else:
-                    self._sample_interval = 1.0
-                    self._sample_unit = "sample"
+                    self._sample_interval_seconds = 1.0
 
                 # MALA is typically time-based (GPR data)
                 self._is_depth = False
+
+                # Extract signal position (time zero offset) from MALA header
+                # SIGNAL POSITION is in nanoseconds
+                signal_position_ns = float(info.get('SIGNAL POSITION', 0))
+                self._sample_min_seconds = signal_position_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
 
                 # Distance interval from MALA header
                 distance_interval = float(info.get('DISTANCE INTERVAL', 0))
@@ -772,8 +792,6 @@ class SeismicSubWindow(UASSubWindow):
                     self._trace_coords = None
                     self._distance_unit = "trace"
 
-                self._sample_min = 0.0
-
             self._filename = filename
             percentile = np.percentile(np.abs(self._data), 95)
             self._amplitude_min = -percentile
@@ -785,9 +803,8 @@ class SeismicSubWindow(UASSubWindow):
             self.remove_colorbar()
             self._trace_coords = None
             self._distance_unit = "trace"
-            self._sample_interval = 1.0
-            self._sample_unit = "sample"
-            self._sample_min = 0.0
+            self._sample_interval_seconds = 1.0
+            self._sample_min_seconds = 0.0
             self._is_depth = False
             self._amplitude_min = 0.0
             self._amplitude_max = 0.0
@@ -795,6 +812,17 @@ class SeismicSubWindow(UASSubWindow):
             self._filename = ""
             ret = False
 
+        if self._sample_min_seconds < 0 or self._sample_min_seconds >= self._data.shape[0] * self._sample_interval_seconds:
+            # default to 10% of the data range
+            self._sample_min_seconds = self._data.shape[0] * self._sample_interval_seconds * 0.1
+        self._sample_min_seconds = round(self._sample_min_seconds / self._sample_interval_seconds) * self._sample_interval_seconds
+        self.canvas_render()
+        return ret
+
+        self._sample_min_seconds = abs(self._sample_min_seconds)
+        self._sample_min_seconds = round(self._sample_min_seconds / self._sample_interval_seconds) * self._sample_interval_seconds
+        assert self._sample_min_seconds < self._data.shape[0] * self._sample_interval_seconds,\
+            f"sample_min_seconds: {self._sample_min_seconds} must be less than the data range: {self._data.shape[0] * self._sample_interval_seconds} (samples: {self._data.shape[0]}, sample_interval_seconds: {self._sample_interval_seconds})"
         self.canvas_render()
         return ret
 

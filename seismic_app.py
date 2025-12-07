@@ -194,15 +194,14 @@ class SeismicMainWindow(UASMainWindow):
             parts.append(f"Trace: {hover_info['trace_number']}")
 
         if 'horizontal_distance' in hover_info and 'distance_unit' in hover_info:
-            parts.append(f"Distance: {hover_info['horizontal_distance']:.2f} {hover_info['distance_unit']}")
+            parts.append(f"Distance: {hover_info['horizontal_distance']:.2f} [{hover_info['distance_unit']}]")
 
         if 'sample_number' in hover_info:
             parts.append(f"Sample: {hover_info['sample_number']}")
 
-        if 'depth_time_value' in hover_info and 'depth_time_unit' in hover_info:
-            is_depth = hover_info.get('is_depth', False)
-            label = "Depth" if is_depth else "Time"
-            parts.append(f"{label}: {hover_info['depth_time_value']:.3f} {hover_info['depth_time_unit']}")
+        if 'z_value' in hover_info and 'z_units' in hover_info:
+            label = "Depth" if hover_info.get('is_depth', False) else "Time"
+            parts.append(f"{label}: {hover_info['z_value']:.3f} [{hover_info['z_units']}]")
 
         if 'amplitude' in hover_info:
             parts.append(f"Amplitude: {hover_info['amplitude']:.3f}")
