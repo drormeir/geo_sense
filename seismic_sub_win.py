@@ -1,8 +1,9 @@
 import numpy as np
 import os
 from typing import Any
+from enum import Enum
 
-from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox, QCheckBox
+from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox, QCheckBox, QSpinBox, QDoubleSpinBox, QHBoxLayout, QLabel
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -11,6 +12,7 @@ from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
 from matplotlib.backend_bases import NavigationToolbar2
+from matplotlib.ticker import MultipleLocator, AutoMinorLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from uas import UASSubWindow, UASMainWindow, auto_register
 
@@ -19,24 +21,54 @@ from gprpy.toolbox.gprIO_MALA import readMALA
 from gs_icon import create_gs_icon
 from global_settings import GlobalSettings
 
+class AxisType(Enum):
+    NONE = "None"
+    SAMPLE = "Sample"
+    TIME = "Time"
+    DEPTH = "Depth"
+    DISTANCE = "Distance"
+    TRACE = "Trace"
+
+
+axis_type_to_label: dict[AxisType, str] = {
+    AxisType.NONE: "None",
+    AxisType.SAMPLE: "Sample Number",
+    AxisType.TIME: "Time",
+    AxisType.DEPTH: "Depth",
+    AxisType.DISTANCE: "Distance",
+    AxisType.TRACE: "Trace Number",
+}
 
 class DisplaySettingsDialog(QDialog):
     """
     Dialog for configuring display axis settings for each border.
     """
     default_settings = {
-        'top': 'None',
-        'bottom': 'Distance',
-        'left': 'Sample',
-        'right': 'None',
+        'top': AxisType.NONE,
+        'bottom': AxisType.DISTANCE,
+        'left': AxisType.SAMPLE,
+        'right': AxisType.NONE,
         'colormap': 'seismic',
         'flip_colormap': False,
         'colorbar_visible': True,
         'file_name_in_plot': True,
+        'top_major_tick': 0.0,
+        'top_minor_ticks': 0,
+        'bottom_major_tick': 0.0,
+        'bottom_minor_ticks': 0,
+        'left_major_tick': 0.0,
+        'left_minor_ticks': 0,
+        'right_major_tick': 0.0,
+        'right_minor_ticks': 0,
     }
     colormap_options = ["seismic", "gray", "viridis", "plasma", "RdBu", "hot", "coolwarm", "jet"]
-    vertical_options = ["None", "Sample", "Time", "Depth"]
-    horizontal_options = ["None", "Distance", "Trace sample"]
+    vertical_options = [AxisType.NONE, AxisType.SAMPLE, AxisType.TIME, AxisType.DEPTH]
+    horizontal_options = [AxisType.NONE, AxisType.DISTANCE, AxisType.TRACE]
+
+    @staticmethod
+    def _enum_to_string_list(enum_list: list[AxisType]) -> list[str]:
+        """Convert list of AxisType enums to their string values."""
+        return [axis_type.value for axis_type in enum_list]
 
 
     def __init__(self, parent: 'SeismicSubWindow', current_settings: dict[str, Any]|None = None):
@@ -58,31 +90,87 @@ class DisplaySettingsDialog(QDialog):
 
         # Top and Bottom borders (horizontal)
 
+        top_layout = QHBoxLayout()
         self.top_combo = QComboBox()
-        self.top_combo.addItems(DisplaySettingsDialog.horizontal_options)
-        self.top_combo.setCurrentText(current_settings['top'])
+        self.top_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
+        self.top_combo.setCurrentText(current_settings.get('top', AxisType.NONE).value)
         self.top_combo.currentIndexChanged.connect(self._on_setting_changed)
-        form_layout.addRow("Top border:", self.top_combo)
+        top_layout.addWidget(self.top_combo)
+        top_layout.addWidget(QLabel("Major tick:"))
+        self.top_major_tick = QDoubleSpinBox()
+        self.top_major_tick.setRange(0, 10000)
+        self.top_major_tick.setValue(current_settings['top_major_tick'])
+        self.top_major_tick.valueChanged.connect(self._on_setting_changed)
+        top_layout.addWidget(self.top_major_tick)
+        top_layout.addWidget(QLabel("Minor/major:"))
+        self.top_minor_ticks = QSpinBox()
+        self.top_minor_ticks.setRange(0, 100)
+        self.top_minor_ticks.setValue(current_settings['top_minor_ticks'])
+        self.top_minor_ticks.valueChanged.connect(self._on_setting_changed)
+        top_layout.addWidget(self.top_minor_ticks)
+        form_layout.addRow("Top border:", top_layout)
 
+        bottom_layout = QHBoxLayout()
         self.bottom_combo = QComboBox()
-        self.bottom_combo.addItems(DisplaySettingsDialog.horizontal_options)
-        self.bottom_combo.setCurrentText(current_settings['bottom'])
+        self.bottom_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
+        self.bottom_combo.setCurrentText(current_settings.get('bottom', AxisType.DISTANCE).value)
         self.bottom_combo.currentIndexChanged.connect(self._on_setting_changed)
-        form_layout.addRow("Bottom border:", self.bottom_combo)
+        bottom_layout.addWidget(self.bottom_combo)
+        bottom_layout.addWidget(QLabel("Major tick:"))
+        self.bottom_major_tick = QDoubleSpinBox()
+        self.bottom_major_tick.setRange(0, 10000)
+        self.bottom_major_tick.setValue(current_settings['bottom_major_tick'])
+        self.bottom_major_tick.valueChanged.connect(self._on_setting_changed)
+        bottom_layout.addWidget(self.bottom_major_tick)
+        bottom_layout.addWidget(QLabel("Minor/major:"))
+        self.bottom_minor_ticks = QSpinBox()
+        self.bottom_minor_ticks.setRange(0, 100)
+        self.bottom_minor_ticks.setValue(current_settings['bottom_minor_ticks'])
+        self.bottom_minor_ticks.valueChanged.connect(self._on_setting_changed)
+        bottom_layout.addWidget(self.bottom_minor_ticks)
+        form_layout.addRow("Bottom border:", bottom_layout)
 
         # Left and Right borders (vertical)
 
+        left_layout = QHBoxLayout()
         self.left_combo = QComboBox()
-        self.left_combo.addItems(DisplaySettingsDialog.vertical_options)
-        self.left_combo.setCurrentText(current_settings['left'])
+        self.left_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
+        self.left_combo.setCurrentText(current_settings.get('left', AxisType.SAMPLE).value)
         self.left_combo.currentIndexChanged.connect(self._on_setting_changed)
-        form_layout.addRow("Left border:", self.left_combo)
+        left_layout.addWidget(self.left_combo)
+        left_layout.addWidget(QLabel("Major tick:"))
+        self.left_major_tick = QDoubleSpinBox()
+        self.left_major_tick.setRange(0, 10000)
+        self.left_major_tick.setValue(current_settings['left_major_tick'])
+        self.left_major_tick.valueChanged.connect(self._on_setting_changed)
+        left_layout.addWidget(self.left_major_tick)
+        left_layout.addWidget(QLabel("Minor/major:"))
+        self.left_minor_ticks = QSpinBox()
+        self.left_minor_ticks.setRange(0, 100)
+        self.left_minor_ticks.setValue(current_settings['left_minor_ticks'])
+        self.left_minor_ticks.valueChanged.connect(self._on_setting_changed)
+        left_layout.addWidget(self.left_minor_ticks)
+        form_layout.addRow("Left border:", left_layout)
 
+        right_layout = QHBoxLayout()
         self.right_combo = QComboBox()
-        self.right_combo.addItems(DisplaySettingsDialog.vertical_options)
-        self.right_combo.setCurrentText(current_settings['right'])
+        self.right_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
+        self.right_combo.setCurrentText(current_settings.get('right', AxisType.NONE).value)
         self.right_combo.currentIndexChanged.connect(self._on_setting_changed)
-        form_layout.addRow("Right border:", self.right_combo)
+        right_layout.addWidget(self.right_combo)
+        right_layout.addWidget(QLabel("Major tick:"))
+        self.right_major_tick = QDoubleSpinBox()
+        self.right_major_tick.setRange(0, 10000)
+        self.right_major_tick.setValue(current_settings['right_major_tick'])
+        self.right_major_tick.valueChanged.connect(self._on_setting_changed)
+        right_layout.addWidget(self.right_major_tick)
+        right_layout.addWidget(QLabel("Minor/major:"))
+        self.right_minor_ticks = QSpinBox()
+        self.right_minor_ticks.setRange(0, 100)
+        self.right_minor_ticks.setValue(current_settings['right_minor_ticks'])
+        self.right_minor_ticks.valueChanged.connect(self._on_setting_changed)
+        right_layout.addWidget(self.right_minor_ticks)
+        form_layout.addRow("Right border:", right_layout)
 
         layout.addLayout(form_layout)
 
@@ -93,25 +181,25 @@ class DisplaySettingsDialog(QDialog):
         # Common colormaps
         self.colormap_combo = QComboBox()
         self.colormap_combo.addItems(DisplaySettingsDialog.colormap_options)
-        self.colormap_combo.setCurrentText(current_settings['colormap'])
+        self.colormap_combo.setCurrentText(current_settings.get('colormap', 'seismic'))
         self.colormap_combo.currentIndexChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("Color scheme:", self.colormap_combo)
 
         # Flip colormap checkbox
         self.flip_colormap_checkbox = QCheckBox("Flip colormap")
-        self.flip_colormap_checkbox.setChecked(current_settings['flip_colormap'])
+        self.flip_colormap_checkbox.setChecked(current_settings.get('flip_colormap', False))
         self.flip_colormap_checkbox.stateChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("", self.flip_colormap_checkbox)
 
         # Colorbar visible checkbox
         self.colorbar_visible_checkbox = QCheckBox("Show Colorbar")
-        self.colorbar_visible_checkbox.setChecked(current_settings['colorbar_visible'])
+        self.colorbar_visible_checkbox.setChecked(current_settings.get('colorbar_visible', True))
         self.colorbar_visible_checkbox.stateChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("", self.colorbar_visible_checkbox)
 
         # File name in plot checkbox
         self.file_name_in_plot_checkbox = QCheckBox("Show file name in plot")
-        self.file_name_in_plot_checkbox.setChecked(current_settings['file_name_in_plot'])
+        self.file_name_in_plot_checkbox.setChecked(current_settings.get('file_name_in_plot', True))
         self.file_name_in_plot_checkbox.stateChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("", self.file_name_in_plot_checkbox)
 
@@ -153,14 +241,22 @@ class DisplaySettingsDialog(QDialog):
     def get_settings(self):
         """Return the selected settings as a dictionary."""
         return {
-            'top': self.top_combo.currentText(),
-            'bottom': self.bottom_combo.currentText(),
-            'left': self.left_combo.currentText(),
-            'right': self.right_combo.currentText(),
+            'top': AxisType(self.top_combo.currentText()),
+            'bottom': AxisType(self.bottom_combo.currentText()),
+            'left': AxisType(self.left_combo.currentText()),
+            'right': AxisType(self.right_combo.currentText()),
             'colormap': self.colormap_combo.currentText(),
             'flip_colormap': self.flip_colormap_checkbox.isChecked(),
             'colorbar_visible': self.colorbar_visible_checkbox.isChecked(),
-            'file_name_in_plot': self.file_name_in_plot_checkbox.isChecked()
+            'file_name_in_plot': self.file_name_in_plot_checkbox.isChecked(),
+            'top_major_tick': self.top_major_tick.value(),
+            'top_minor_ticks': self.top_minor_ticks.value(),
+            'bottom_major_tick': self.bottom_major_tick.value(),
+            'bottom_minor_ticks': self.bottom_minor_ticks.value(),
+            'left_major_tick': self.left_major_tick.value(),
+            'left_minor_ticks': self.left_minor_ticks.value(),
+            'right_major_tick': self.right_major_tick.value(),
+            'right_minor_ticks': self.right_minor_ticks.value(),
         }
 
 
@@ -253,6 +349,16 @@ class SeismicSubWindow(UASSubWindow):
         # Register as listener for global settings changes
         GlobalSettings.add_listener(self._on_global_settings_changed)
 
+
+    def _get_unit_label(self, axis_type: AxisType) -> str:
+        if axis_type in [AxisType.TIME, AxisType.DEPTH]:
+            return self._z_display_units
+        return ""
+
+    def _get_axis_geometry(self, axis_type: AxisType) -> tuple:
+        if axis_type in [AxisType.TIME, AxisType.DEPTH]:
+            return (-self._sample_min_seconds*self._z_display_value_factor, self._sample_interval_seconds*self._z_display_value_factor, self._data.shape[0])
+        return (0, 1, self._data.shape[1])
 
     def _show_error(self, title: str, message: str) -> None:
         """Show error message by rendering it on the matplotlib canvas.
@@ -453,10 +559,13 @@ class SeismicSubWindow(UASSubWindow):
             self._canvas.draw_idle()
 
         # Apply zoom if rectangle is large enough (at least a few pixels)
-        if abs(x1 - x0) > 1 and abs(y1 - y0) > 1:
-            self._axes.set_xlim(min(x0, x1), max(x0, x1))
-            self._axes.set_ylim(max(y0, y1), min(y0, y1))  # Inverted for image coordinates
-            self._canvas.draw_idle()
+        x_mid = (x0 + x1) / 2
+        y_mid = (y0 + y1) / 2
+        dx = max(5, abs(x1 - x0)/2)
+        dy = max(5, abs(y1 - y0)/2)
+        self._axes.set_xlim(x_mid - dx, x_mid + dx)
+        self._axes.set_ylim(y_mid - dy, y_mid + dy)  # Inverted for image coordinates
+        self._canvas.draw_idle()
 
         self._press_event = None
 
@@ -533,23 +642,21 @@ class SeismicSubWindow(UASSubWindow):
 
 
     def _update_colorbar_indicator(self, amplitude: float|None) -> None:
+        """Update the horizontal indicator line on the colorbar."""
         self.remove_colorbar_indicator()
 
-        """Update the horizontal indicator line on the colorbar."""
-        if self._image is not None and self._colorbar is not None and amplitude is not None:
-            try:
-                norm_value = (amplitude - self._amplitude_min) / (self._amplitude_max - self._amplitude_min)
-                norm_value = max(0.0, min(1.0, norm_value))  # Clamp to [0, 1]
-                # Get the color from the colormap
-                cmap = self._image.get_cmap()
-                rgba = cmap(norm_value)
-                # Get inverted color for visibility
-                inv_color = (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
-                # Draw new indicator line spanning the colorbar width
-                self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
-            except (np.linalg.LinAlgError, ValueError):
-                # Colorbar axis not yet properly initialized, skip indicator
-                pass
+        if self._image is None or self._colorbar is None or amplitude is None:
+            return
+        # If amplitude is None, use the middle of the colorbar
+        if abs(self._amplitude_min - self._amplitude_max) < 1e-9:
+            norm_value = 0.5
+        else:
+            norm_value = (amplitude - self._amplitude_min) / (self._amplitude_max - self._amplitude_min)
+            norm_value = max(0.0, min(1.0, norm_value))  # Clamp to [0, 1]
+        cmap = self._image.get_cmap()
+        rgba = cmap(norm_value)
+        inv_color = (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
+        self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
         self._canvas.draw_idle()
 
 
@@ -607,7 +714,14 @@ class SeismicSubWindow(UASSubWindow):
         """Serialize subwindow state including loaded file and color scale."""
         state = super().serialize()
         state['filename'] = self._filename
-        state['display_settings'] = self._display_settings
+
+        # Convert AxisType enums to strings for JSON serialization
+        serialized_settings = dict(self._display_settings)
+        for key in ['top', 'bottom', 'left', 'right']:
+            if key in serialized_settings and isinstance(serialized_settings[key], AxisType):
+                serialized_settings[key] = serialized_settings[key].value
+
+        state['display_settings'] = serialized_settings
         return state
 
 
@@ -615,7 +729,12 @@ class SeismicSubWindow(UASSubWindow):
         """Restore subwindow state including loaded file and color scale."""
         super().deserialize(state)
         if 'display_settings' in state:
-            self._display_settings = state['display_settings']
+            settings = state['display_settings']
+            # Convert string values back to AxisType enums
+            for key in ['top', 'bottom', 'left', 'right']:
+                if key in settings and isinstance(settings[key], str):
+                    settings[key] = AxisType(settings[key])
+            self._display_settings = settings
         self.load_file(state.get("filename", ""))
 
 
@@ -717,6 +836,7 @@ class SeismicSubWindow(UASSubWindow):
                     # Extract delay recording time (time of first sample) from first trace header
                     try:
                         # DelayRecordingTime from trace header (bytes 109-110, in milliseconds per SEG-Y standard)
+                        # TODO: what should I do with trace's delay recording time?
                         delay_ms = f.header[0][segyio.TraceField.DelayRecordingTime]
                         t0 = delay_ms / 1000.0  # Convert milliseconds to seconds
                     except Exception as e:
@@ -800,7 +920,8 @@ class SeismicSubWindow(UASSubWindow):
             self._filename = ""
             ret = False
 
-
+        if self._data is None:
+            return ret
         z_range_seconds = self._data.shape[0] * self._sample_interval_seconds
         if self._sample_min_seconds < 0 or self._sample_min_seconds >= z_range_seconds:
             # default to 10% of the data range
@@ -819,14 +940,6 @@ class SeismicSubWindow(UASSubWindow):
             self._z_display_units = "s"
             self._z_display_value_factor = 1.0
 
-
-        self.canvas_render()
-        return ret
-
-        self._sample_min_seconds = abs(self._sample_min_seconds)
-        self._sample_min_seconds = round(self._sample_min_seconds / self._sample_interval_seconds) * self._sample_interval_seconds
-        assert self._sample_min_seconds < self._data.shape[0] * self._sample_interval_seconds,\
-            f"sample_min_seconds: {self._sample_min_seconds} must be less than the data range: {self._data.shape[0] * self._sample_interval_seconds} (samples: {self._data.shape[0]}, sample_interval_seconds: {self._sample_interval_seconds})"
         self.canvas_render()
         return ret
 
@@ -868,24 +981,24 @@ class SeismicSubWindow(UASSubWindow):
         base_horizontal_margin_px = GlobalSettings.margins_px['base_horizontal']
 
         top_margin_px = base_vertical_margin_px
-        if self._display_settings.get('top', 'None') != 'None':
+        if self._display_settings.get('top', AxisType.NONE) != AxisType.NONE:
             top_margin_px += horizontal_axes_margin_px
         if self._display_settings.get('file_name_in_plot', True):
             top_margin_px += base_vertical_margin_px
 
         bottom_margin_px = base_vertical_margin_px
-        if self._display_settings.get('bottom', 'None') != 'None':
+        if self._display_settings.get('bottom', AxisType.NONE) != AxisType.NONE:
             bottom_margin_px += horizontal_axes_margin_px
 
         bottom = bottom_margin_px / height_px
         height = 1.0 - (top_margin_px + bottom_margin_px) / height_px
 
         left_image_margin_px = base_horizontal_margin_px
-        if self._display_settings.get('left', 'None') != 'None':
+        if self._display_settings.get('left', AxisType.NONE) != AxisType.NONE:
             left_image_margin_px += vertical_axes_margin_px
 
         right_image_margin_px = base_horizontal_margin_px
-        if self._display_settings.get('right', 'None') != 'None':
+        if self._display_settings.get('right', AxisType.NONE) != AxisType.NONE:
             right_image_margin_px += vertical_axes_margin_px
 
         if self.is_colorbar_axes_visible():
@@ -995,9 +1108,73 @@ class SeismicSubWindow(UASSubWindow):
         self._settings_dialog.finished.connect(self._on_settings_dialog_closed)
         self._settings_dialog.show()
 
+
     def _on_settings_dialog_closed(self):
         """Clean up when settings dialog is closed."""
         self._settings_dialog = None
+
+
+    def _apply_tick_settings(self, axis: plt.Axes, axis_type: AxisType, major_tick_distance: float, minor_ticks_per_major: int) -> None:
+        """
+        Apply tick settings to an axis with a reference offset.
+
+        Args:
+            axis: matplotlib axis object (e.g., self._axes.xaxis or self._axes.yaxis)
+            axis_type: AxisType for the axis
+            axis_geometry: Tuple containing the axis minimum, step, and number of samples
+            major_tick_distance: Distance between major ticks (0 = auto)
+            minor_ticks_per_major: Number of minor ticks between major ticks (0 = none)
+            offset: Reference point for tick alignment (default: 0.0)
+        """
+        label = axis_type_to_label[axis_type]
+        axis_unit_label = self._get_unit_label(axis_type)
+        if axis_unit_label:
+            label = f"{label} [{axis_unit_label}]"
+        axis.set_label_text(label)
+        if major_tick_distance <= 0:
+            axis.set_major_locator(plt.NullLocator())
+            axis.set_minor_locator(plt.NullLocator())
+            return
+
+        def n_ticks(view_val, distance) -> int:
+            # Calculate tick multiplier for exact multiples of distance
+            # Uses int() truncation to only include ticks at 0, ±distance, ±2*distance, etc.
+            # Example: view_val=-10, distance=25 -> returns 0 (no tick at -25 since -10 > -25)
+            #          view_val=-30, distance=25 -> returns -1 (includes tick at -25)
+            return int(abs(view_val) / distance) * int(np.sign(view_val))
+
+        axis_min, axis_step, axis_num_samples = self._get_axis_geometry(axis_type)
+        axis_max = axis_min + axis_step * (axis_num_samples - 1)
+        print(f"axis_min: {axis_min}, axis_max: {axis_max}, axis_step: {axis_step}, axis_num_samples: {axis_num_samples}")
+
+        # Calculate tick positions in display units
+        n_min = n_ticks(axis_min, major_tick_distance)
+        n_max = n_ticks(axis_max, major_tick_distance)
+        major_tick_values = np.arange(n_min, n_max + 1) * major_tick_distance
+
+        # Convert display unit positions to data coordinates (pixel indices)
+        major_tick_positions = (major_tick_values - axis_min) / axis_step
+
+        # Set ticks at data coordinate positions with display unit labels
+        axis.set_ticks(major_tick_positions)
+        axis.set_ticklabels([f'{val:.3g}' for val in major_tick_values])
+
+        if minor_ticks_per_major < 2:
+            axis.set_minor_locator(plt.NullLocator())
+            return
+
+        # Calculate minor tick positions
+        minor_tick_distance = major_tick_distance / minor_ticks_per_major
+        n_min_minor = n_ticks(axis_min, minor_tick_distance)
+        n_max_minor = n_ticks(axis_max, minor_tick_distance)
+        minor_tick_values = [i * minor_tick_distance for i in range(n_min_minor, n_max_minor + 1)
+                            if i % minor_ticks_per_major != 0]
+
+        # Convert to data coordinates
+        minor_tick_positions = [(val - axis_min) / axis_step for val in minor_tick_values]
+        axis.set_ticks(minor_tick_positions, minor=True)
+
+
 
     def _apply_display_settings(self) -> None:
         """Apply the display settings to the axes."""
@@ -1019,11 +1196,10 @@ class SeismicSubWindow(UASSubWindow):
             self._axes.set_title(os.path.basename(self._filename))
 
         # Get current settings
-        top = self._display_settings.get('top', 'None')
-        bottom = self._display_settings.get('bottom', 'Distance')
-        left = self._display_settings.get('left', 'Sample')
-        right = self._display_settings.get('right', 'None')
-
+        top = self._display_settings.get('top', AxisType.NONE)
+        bottom = self._display_settings.get('bottom', AxisType.DISTANCE)
+        left = self._display_settings.get('left', AxisType.SAMPLE)
+        right = self._display_settings.get('right', AxisType.NONE)
 
         # remove top and bottom labels
         self._axes.set_xlabel(None)
@@ -1031,71 +1207,60 @@ class SeismicSubWindow(UASSubWindow):
         self._axes.secondary_xaxis('top').set_visible(False)
 
         # Apply top axis
-        if top == 'None':
+        if top == AxisType.NONE:
             self._axes.xaxis.set_tick_params(top=False, labeltop=False)
             self._axes.secondary_xaxis('top').set_visible(False)
         else:
             ax2 = self._axes.secondary_xaxis('top')
             ax2.set_visible(True)
             ax2.tick_params(axis='x', top=True, labeltop=True)
-            if top == 'Distance':
-                ax2.set_xlabel("Distance" if self._distance_unit == "m" else "Trace Number")
-            elif top == 'Trace sample':
-                ax2.set_xlabel("Trace Number")
+            self._apply_tick_settings(
+                ax2.xaxis,
+                top,
+                self._display_settings.get('top_major_tick', 0.0),
+                self._display_settings.get('top_minor_ticks', 0)
+            )
 
         # Apply bottom axis
-        if bottom == 'None':
+        if bottom == AxisType.NONE:
             self._axes.xaxis.set_tick_params(bottom=False, labelbottom=False)
         else:
             self._axes.xaxis.set_tick_params(bottom=True, labelbottom=True)
-            if bottom == 'Distance':
-                self._axes.set_xlabel("Distance" if self._distance_unit == "m" else "Trace Number")
-            elif bottom == 'Trace sample':
-                self._axes.set_xlabel("Trace Number")
+            self._apply_tick_settings(
+                self._axes.xaxis,
+                bottom,
+                self._display_settings.get('bottom_major_tick', 0.0),
+                self._display_settings.get('bottom_minor_ticks', 0)
+            )
 
         # Apply left axis
-        if left == 'None':
+        if left == AxisType.NONE:
             self._axes.yaxis.set_tick_params(left=False, labelleft=False)
         else:
             self._axes.yaxis.set_tick_params(left=True, labelleft=True)
-            if left == 'Time' and not self._is_depth:
-                # Create labels for time values
-                num_samples = self._data.shape[0]
-                tick_positions = self._axes.get_yticks()
-                # Only keep valid tick positions and create matching labels
-                valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
-                tick_labels = [f"{(-self._sample_min_seconds + pos * self._sample_interval_seconds) * self._z_display_value_factor:.2f}" for pos in valid_ticks]
-                self._axes.set_yticks(valid_ticks)
-                self._axes.set_yticklabels(tick_labels)
-                self._axes.set_ylabel(f"Time [{self._z_display_units}]")
-            elif left == 'Depth' and self._is_depth:
-                # Create labels for depth values
-                num_samples = self._data.shape[0]
-                tick_positions = self._axes.get_yticks()
-                # Only keep valid tick positions and create matching labels
-                valid_ticks = [pos for pos in tick_positions if 0 <= pos < num_samples]
-                tick_labels = [f"{(-self._sample_min_seconds + pos * self._sample_interval_seconds) * self._z_display_value_factor:.2f}" for pos in valid_ticks]
-                self._axes.set_yticks(valid_ticks)
-                self._axes.set_yticklabels(tick_labels)
-                self._axes.set_ylabel(f"Depth [{self._z_display_units}]")
-            else:
-                self._axes.set_ylabel("Sample Number")
+            self._apply_tick_settings(
+                self._axes.yaxis,
+                left,
+                self._display_settings.get('left_major_tick', 0.0),
+                self._display_settings.get('left_minor_ticks', 0)
+            )
+            # Apply tick settings for left axis
 
         # Apply right axis
-        if right == 'None':
+        if right == AxisType.NONE:
             self._axes.yaxis.set_tick_params(right=False, labelright=False)
             self._axes.secondary_yaxis('right').set_visible(False)
         else:
             ax2 = self._axes.secondary_yaxis('right')
             ax2.set_visible(True)
             ax2.tick_params(axis='y', right=True, labelright=True)
-            if right == 'Time' and not self._is_depth:
-                ax2.set_ylabel(f"Time [{self._z_display_units}]")
-            elif right == 'Depth' and self._is_depth:
-                ax2.set_ylabel(f"Depth [{self._z_display_units}]")
-            else:
-                # Use secondary y-axis for sample numbers on right
-                ax2.set_ylabel("Sample Number")
+            self._apply_tick_settings(
+                ax2.yaxis,
+                right,
+                self._display_settings.get('right_major_tick', 0.0),
+                self._display_settings.get('right_minor_ticks', 0)
+            )
+
 
     def is_colorbar_axes_visible(self) -> bool:
         colorbar_visible = self._display_settings.get('colorbar_visible', True) # must check with default value True
