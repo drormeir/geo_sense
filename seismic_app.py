@@ -31,7 +31,7 @@ from uas import (
 
 from gs_icon import create_gs_icon
 from seismic_sub_win import SeismicSubWindow
-from global_settings import GlobalSettings
+from global_settings import GlobalSettings, UnitSystem
 
 
 @auto_register
@@ -193,8 +193,9 @@ class SeismicMainWindow(UASMainWindow):
         if 'trace_number' in hover_info:
             parts.append(f"Trace: {hover_info['trace_number']}")
 
-        if 'horizontal_distance' in hover_info and 'distance_unit' in hover_info:
-            parts.append(f"Distance: {hover_info['horizontal_distance']:.2f} [{hover_info['distance_unit']}]")
+        distance = hover_info.get('distance', None)
+        if distance is not None:
+            parts.append(f"Distance: {distance:.2f} [{GlobalSettings.display_length_unit}]")
 
         if 'sample_number' in hover_info:
             parts.append(f"Sample: {hover_info['sample_number']}")

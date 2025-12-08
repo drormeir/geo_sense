@@ -30,6 +30,12 @@ class UnitSystem(Enum):
     MKS = "MKS"  # Meter-Kilogram-Second
     IMPERIAL = "Imperial"  # Foot-Pound-Second
 
+    @staticmethod
+    def convert_length_factor(source: 'UnitSystem', target: 'UnitSystem') -> float:
+        if source == target:
+            return 1.0
+        return 0.3048 if target == UnitSystem.IMPERIAL else 3.28084
+
 
 class GlobalSettings(QDialog):
     """
@@ -53,10 +59,12 @@ class GlobalSettings(QDialog):
         'colorbar_width': 30,
     }
 
-    unit_system: UnitSystem = UnitSystem.MKS
-    unit_system_prefix: str = 'unit_system'
-    unit_system_options: list[str] = ["MKS", "Imperial"]
-    
+    display_unit_system: UnitSystem = UnitSystem.MKS
+    display_unit_system_prefix: str = 'unit_system'
+    display_unit_system_options: list[str] = [UnitSystem.MKS.value, UnitSystem.IMPERIAL.value]
+    display_length_factor: float = UnitSystem.convert_length_factor(UnitSystem.MKS, display_unit_system)
+    display_length_unit: str = "m" if display_unit_system == UnitSystem.MKS else "ft"
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(GlobalSettings, cls).__new__(cls)
@@ -153,7 +161,7 @@ class GlobalSettings(QDialog):
             Dictionary containing all settings.
         """
         ret = {GlobalSettings.margin_prefix + key: value for key, value in GlobalSettings.margins_px.items()}
-        ret[GlobalSettings.unit_system_prefix] = GlobalSettings.unit_system.value
+        ret[GlobalSettings.display_unit_system_prefix] = GlobalSettings.display_unit_system.value
         return ret
 
 
@@ -174,9 +182,20 @@ class GlobalSettings(QDialog):
         for key, value in state.items():
             if key.startswith(GlobalSettings.margin_prefix):
                 GlobalSettings.margins_px[key[len(GlobalSettings.margin_prefix):]] = value
+        GlobalSettings.set_display_unit_system(state.get(GlobalSettings.display_unit_system_prefix, UnitSystem.MKS.value))
 
-        if GlobalSettings.unit_system_prefix in state:
-            GlobalSettings.unit_system = UnitSystem(state[GlobalSettings.unit_system_prefix])
+
+    @classmethod
+    def set_display_unit_system(cls, value: UnitSystem|str) -> None:
+        try:
+            value = UnitSystem(value)
+        except Exception as e:
+            value = UnitSystem.MKS
+            print(f"Error converting unit system: {e}\nUsing default unit system: {UnitSystem.MKS.value}")
+        cls.display_unit_system = value
+        cls.display_length_factor = UnitSystem.convert_length_factor(cls.display_unit_system, UnitSystem.MKS)
+        cls.display_length_unit = "m" if cls.display_unit_system == UnitSystem.MKS else "ft"
+
 
 
     @classmethod
@@ -237,7 +256,7 @@ class GlobalSettings(QDialog):
         units_layout = QFormLayout()
 
         self._unit_combo = QComboBox()
-        self._unit_combo.addItems(GlobalSettings.unit_system_options)
+        self._unit_combo.addItems(GlobalSettings.display_unit_system_options)
         units_layout.addRow("Display units:", self._unit_combo)
 
         units_group.setLayout(units_layout)
@@ -264,7 +283,7 @@ class GlobalSettings(QDialog):
         """Load current settings values into dialog widgets."""
         for key, value in GlobalSettings.margins_px.items():
             self._margin_spins[key].setValue(value)
-        self._unit_combo.setCurrentText(GlobalSettings.unit_system.value)
+        self._unit_combo.setCurrentText(GlobalSettings.display_unit_system.value)
 
 
     def _on_accepted(self) -> None:
@@ -284,7 +303,7 @@ class GlobalSettings(QDialog):
             return
         for key, spin in self._margin_spins.items():
             GlobalSettings.margins_px[key] = spin.value()
-        GlobalSettings.unit_system = UnitSystem(self._unit_combo.currentText())
+        GlobalSettings.set_display_unit_system(self._unit_combo.currentText())
         """Notify all registered listeners that settings have changed."""
         for callback in self._listeners:
             try:

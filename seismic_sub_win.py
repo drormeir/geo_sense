@@ -12,14 +12,14 @@ from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
 from matplotlib.backend_bases import NavigationToolbar2
-from matplotlib.ticker import MultipleLocator, AutoMinorLocator
+from matplotlib.ticker import MultipleLocator, AutoMinorLocator, FuncFormatter
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from uas import UASSubWindow, UASMainWindow, auto_register
 
 import segyio
 from gprpy.toolbox.gprIO_MALA import readMALA
 from gs_icon import create_gs_icon
-from global_settings import GlobalSettings
+from global_settings import GlobalSettings, UnitSystem
 
 class AxisType(Enum):
     NONE = "None"
@@ -358,6 +358,10 @@ class SeismicSubWindow(UASSubWindow):
     def _get_axis_geometry(self, axis_type: AxisType) -> tuple:
         if axis_type in [AxisType.TIME, AxisType.DEPTH]:
             return (-self._sample_min_seconds*self._z_display_value_factor, self._sample_interval_seconds*self._z_display_value_factor, self._data.shape[0])
+        if axis_type in [AxisType.DISTANCE]:
+            nx = self._data.shape[1]
+            dx = self._trace_cumulative_distances[-1] / (nx - 1)
+            return (0, dx*GlobalSettings.display_length_factor, nx)
         return (0, 1, self._data.shape[1])
 
     def _show_error(self, title: str, message: str) -> None:
@@ -559,12 +563,12 @@ class SeismicSubWindow(UASSubWindow):
             self._canvas.draw_idle()
 
         # Apply zoom if rectangle is large enough (at least a few pixels)
-        x_mid = (x0 + x1) / 2
-        y_mid = (y0 + y1) / 2
-        dx = max(5, abs(x1 - x0)/2)
-        dy = max(5, abs(y1 - y0)/2)
+        x_mid = int(round((x0 + x1) / 2))
+        y_mid = int(round((y0 + y1) / 2))
+        dx = max(5, int(round(abs(x1 - x0)/2))) + 0.5
+        dy = max(5, int(round(abs(y1 - y0)/2))) + 0.5
         self._axes.set_xlim(x_mid - dx, x_mid + dx)
-        self._axes.set_ylim(y_mid - dy, y_mid + dy)  # Inverted for image coordinates
+        self._axes.set_ylim(y_mid + dy, y_mid - dy)  # Inverted for image coordinates
         self._canvas.draw_idle()
 
         self._press_event = None
@@ -573,8 +577,8 @@ class SeismicSubWindow(UASSubWindow):
     def _zoom_out(self) -> None:
         """Zoom out to show full data extent."""
         if self._data is not None:
-            self._axes.set_xlim(0, self._data.shape[1])
-            self._axes.set_ylim(self._data.shape[0], 0)  # Inverted for image coordinates
+            self._axes.set_xlim(-0.5, self._data.shape[1] - 0.5)
+            self._axes.set_ylim(self._data.shape[0] - 0.5, -0.5)  # Inverted for image coordinates
             self._canvas.draw_idle()
 
 
@@ -627,8 +631,7 @@ class SeismicSubWindow(UASSubWindow):
         hover_info = None
         if event is not None and event.xdata is not None and event.ydata is not None:
             # Get pixel coordinates
-            x, y = int(round(event.xdata)), int(round(event.ydata))
-            hover_info = self.get_hover_info(x, y)
+            hover_info = self.get_hover_info(event.xdata, event.ydata)
 
         amplitude = hover_info.get('amplitude', None) if hover_info is not None else None
         self._update_colorbar_indicator(amplitude)
@@ -660,7 +663,7 @@ class SeismicSubWindow(UASSubWindow):
         self._canvas.draw_idle()
 
 
-    def get_hover_info(self, x: int, y: int) -> dict[str, Any] | None:
+    def get_hover_info(self, x: float, y: float) -> dict[str, Any] | None:
         """
         Calculate hover information for given pixel coordinates.
 
@@ -674,28 +677,32 @@ class SeismicSubWindow(UASSubWindow):
         if self._data is None:
             return None
 
+        ix, iy = int(round(x)), int(round(y))
+
         # Check bounds
-        if not (0 <= y < self._data.shape[0] and 0 <= x < self._data.shape[1]):
+        if not (0 <= iy < self._data.shape[0] and 0 <= ix < self._data.shape[1]):
             return None
-        z_value = (y * self._sample_interval_seconds - self._sample_min_seconds) * self._z_display_value_factor
+        z_value = (iy * self._sample_interval_seconds - self._sample_min_seconds) * self._z_display_value_factor
         z_units = self._z_display_units
+        if self._trace_cumulative_distances is not None:
+            if ix == len(self._trace_cumulative_distances) - 1:
+                distance = self._trace_cumulative_distances[-1]
+            else:
+                dx = x - ix
+                distance = self._trace_cumulative_distances[ix] * (1-dx) + self._trace_cumulative_distances[ix+1] * dx
+            distance *= GlobalSettings.display_length_factor
+        else:
+            distance = None
 
         hover_info = {
-            'trace_number': x,
-            'sample_number': y,
+            'trace_number': ix,
+            'sample_number': iy,
             'z_value': z_value,
             'z_units': z_units,
             'is_depth': self._is_depth,  # True = depth, False = time
-            'amplitude': self._data[y, x],
+            'amplitude': self._data[iy, ix],
+            'distance': distance,
         }
-
-        # Calculate horizontal distance
-        if self._trace_cumulative_distances is not None and x < len(self._trace_cumulative_distances):
-            # Use pre-calculated cumulative distance along the survey line
-            horizontal_distance = self._trace_cumulative_distances[x]
-            hover_info['horizontal_distance'] = horizontal_distance
-        else:
-            hover_info['horizontal_distance'] = float(x)
 
         return hover_info
 
@@ -812,143 +819,14 @@ class SeismicSubWindow(UASSubWindow):
         if file_type not in ['sgy', 'rd3', 'rd7']:
             self._show_error("Error", f"Invalid file type: {file_type}")
             return False
-        try:
-            if file_type == 'sgy':
-                with segyio.open(filename, "r", ignore_geometry=True) as f:
-                    self._data = f.trace.raw[:].T
 
-                    # Extract metadata from SEGY file
-                    # Sample interval from binary header (bytes 3217-3218, in microseconds per SEG-Y standard)
-                    dt_us = f.bin[segyio.BinField.Interval]
-                    if dt_us > 0:
-                        self._sample_interval_seconds = dt_us / 1_000_000.0  # Convert microseconds to seconds
-                    else:
-                        self._sample_interval_seconds = 1.0
+        if file_type == 'sgy':
+            ret, error_message = self._load_segy_data(filename)
+        else:
+            ret, error_message = self._load_mala_data(filename)
 
-                    # Check if depth or time (assume time by default for SEGY)
-                    self._is_depth = False
-
-                    # Extract delay recording time (time of first sample) from first trace header
-                    try:
-                        # DelayRecordingTime from trace header (bytes 109-110, in milliseconds per SEG-Y standard)
-                        # TODO: what should I do with trace's delay recording time?
-                        delay_ms = f.header[0][segyio.TraceField.DelayRecordingTime]
-                        t0 = delay_ms / 1000.0  # Convert milliseconds to seconds
-                    except Exception as e:
-                        print(f"Error extracting delay recording time: {e}")
-                        self._sample_min_seconds = 0.0
-
-                    # Try to extract trace coordinates from trace headers
-                    try:
-                        num_traces = len(f.trace)
-                        coords = np.zeros((num_traces, 2))
-
-                        # Read coordinate scalar from first trace (assumed constant for all traces)
-                        scalar = f.header[0][segyio.TraceField.SourceGroupScalar]
-                        if scalar < 0:
-                            scale_factor = 1.0 / abs(scalar)
-                        elif scalar > 0:
-                            scale_factor = float(scalar)
-                        else:
-                            scale_factor = 1.0
-
-                        # Read coordinate units from first trace
-                        coord_units = f.header[0][segyio.TraceField.CoordinateUnits]
-
-                        # Read measurement system from binary header (bytes 3255-3256)
-                        # 1 = meters, 2 = feet
-                        measurement_system = f.bin[segyio.BinField.MeasurementSystem]
-
-                        for i in range(num_traces):
-                            # CDP X and Y coordinates with scalar applied
-                            x = f.header[i][segyio.TraceField.CDP_X] * scale_factor
-                            y = f.header[i][segyio.TraceField.CDP_Y] * scale_factor
-                            coords[i] = [x, y]
-
-                        # Only use coordinates if they're not all zeros
-                        if np.any(coords):
-                            self._trace_coords = coords
-
-                            # Calculate cumulative distances along the survey line
-                            # Distance from trace i-1 to trace i for each trace
-                            trace_distances = np.sqrt(np.sum(np.diff(coords, axis=0)**2, axis=1))
-                            # Cumulative sum with 0.0 prepended for first trace
-                            self._trace_cumulative_distances = np.cumsum(np.concatenate([[0.0], trace_distances]))
-
-                            # Set distance unit based on coordinate units field
-                            # 1 = Length (meters or feet), 2 = Seconds of arc, 3 = Decimal degrees, 4 = DMS
-                            if coord_units == 1:
-                                # Use measurement system to distinguish meters vs feet
-                                if measurement_system == 2:
-                                    self._distance_unit = "ft"
-                                else:
-                                    self._distance_unit = "m"  # Default to meters (measurement_system == 1 or 0)
-                            elif coord_units == 2:
-                                self._distance_unit = "arcsec"
-                            elif coord_units == 3:
-                                self._distance_unit = "deg"
-                            elif coord_units == 4:
-                                self._distance_unit = "DMS"
-                            else:
-                                # Default to meters if coordinate units is unknown
-                                if measurement_system == 2:
-                                    self._distance_unit = "ft"
-                                else:
-                                    self._distance_unit = "m"
-                        else:
-                            self._trace_coords = None
-                            self._trace_cumulative_distances = None
-                            self._distance_unit = "trace"
-                    except Exception as e:
-                        print(f"Error extracting trace coordinates: {e}")
-                        self._trace_coords = None
-                        self._trace_cumulative_distances = None
-                        self._distance_unit = "trace"
-
-            else:
-                file_base, _ = os.path.splitext(filename)
-                self._data, info = readMALA(file_base)
-                self._data = np.array(self._data)
-
-                # Extract metadata from MALA header
-                # Calculate sample interval (dt) from TIMEWINDOW and SAMPLES
-                # TIMEWINDOW is in nanoseconds
-                timewindow_ns = float(info.get('TIMEWINDOW', 0))
-                samples = self._data.shape[0]
-                if timewindow_ns > 0 and samples > 1:
-                    dt_ns = timewindow_ns / (samples - 1)
-                    self._sample_interval_seconds = dt_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
-                else:
-                    self._sample_interval_seconds = 1.0
-
-                # MALA is typically time-based (GPR data)
-                self._is_depth = False
-
-                # Extract signal position (time zero offset) from MALA header
-                # SIGNAL POSITION is in nanoseconds
-                signal_position_ns = float(info.get('SIGNAL POSITION', 0))
-                self._sample_min_seconds = signal_position_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
-
-                # Distance interval from MALA header
-                distance_interval = float(info.get('DISTANCE INTERVAL', 0))
-                if distance_interval > 0:
-                    num_traces = self._data.shape[1]
-                    # Create linear coordinates based on distance interval
-                    x_coords = np.arange(num_traces) * distance_interval
-                    self._trace_coords = np.column_stack([x_coords, np.zeros(num_traces)])
-                    # For MALA with uniform spacing, cumulative distances are just the distances
-                    self._trace_cumulative_distances = np.concatenate([x_coords, [x_coords[-1] + distance_interval]])
-                else:
-                    self._trace_coords = None
-                    self._trace_cumulative_distances = None
-
-            self._filename = filename
-            percentile = np.percentile(np.abs(self._data), 95)
-            self._amplitude_min = -percentile
-            self._amplitude_max = percentile
-            ret = True
-        except Exception as e:
-            self._show_error("Error", f"Failed to load file:\n{str(e)}")
+        if not ret:
+            self._show_error("Error", f"Failed to load file: {filename}\n{error_message}")
             self.remove_colorbar_indicator()
             self.remove_colorbar()
             self._trace_coords = None
@@ -961,10 +839,12 @@ class SeismicSubWindow(UASSubWindow):
             self._amplitude_max = 0.0
             self._image = None
             self._filename = ""
-            ret = False
+            return False
 
-        if self._data is None:
-            return ret
+        self._filename = filename
+        percentile = np.percentile(np.abs(self._data), 95)
+        self._amplitude_min = -percentile
+        self._amplitude_max = percentile
         z_range_seconds = self._data.shape[0] * self._sample_interval_seconds
         if self._sample_min_seconds < 0 or self._sample_min_seconds >= z_range_seconds:
             # default to 10% of the data range
@@ -983,18 +863,160 @@ class SeismicSubWindow(UASSubWindow):
             self._z_display_units = "s"
             self._z_display_value_factor = 1.0
 
+        # Calculate cumulative distances along the survey line
+        # Distance from trace i-1 to trace i for each trace
+        assert self._trace_coords is not None
+        assert self._trace_coords.shape[1] == 2
+        trace_distances = np.sqrt(np.sum(np.diff(self._trace_coords, axis=0)**2, axis=1))
+        # Cumulative sum with 0.0 prepended for first trace
+        self._trace_cumulative_distances = np.cumsum(np.concatenate([[0.0], trace_distances]))
+
         self.canvas_render()
         return ret
+
+
+    def _load_segy_data(self, filename: str) -> tuple[bool, str]:
+        try:
+            with segyio.open(filename, "r", ignore_geometry=True) as f:
+                self._data = f.trace.raw[:].T
+                if self._data is None or self._data.size == 0:
+                    return False, "No data found in SEGY file"
+                # Extract metadata from SEGY file
+                # Sample interval from binary header (bytes 3217-3218, in microseconds per SEG-Y standard)
+                dt_us = f.bin[segyio.BinField.Interval]
+                if dt_us <= 0:
+                    return False, "Sample interval is not set in SEGY file"
+                self._sample_interval_seconds = dt_us / 1_000_000.0  # Convert microseconds to seconds
+
+                # Check if depth or time (assume time by default for SEGY)
+                self._is_depth = False
+
+                # Try to extract trace coordinates from trace headers
+                num_traces = len(f.trace)
+                coords = np.full((num_traces, 2), fill_value=np.nan)
+
+                segy_coord_unit_map = {
+                    1: "length", # meters or feet
+                    2: "arcsec", # seconds of arc
+                    3: "deg", # decimal degrees
+                    4: "DMS", # degrees, minutes, seconds
+                }
+                segy_measurement_system_map = {
+                    1: UnitSystem.MKS,
+                    2: UnitSystem.IMPERIAL,
+                }
+                # Read measurement system from binary header (bytes 3255-3256)
+                measurement_system = f.bin[segyio.BinField.MeasurementSystem]
+                file_unit_system = segy_measurement_system_map.get(measurement_system, UnitSystem.MKS)
+                convert_2_mks = UnitSystem.convert_length_factor(file_unit_system, UnitSystem.MKS)
+                time_delays_seconds = np.full(num_traces, fill_value=np.nan)
+                count_valid_coords = 0
+                for i in range(num_traces):
+                    trace_header = f.header[i]
+                    # DelayRecordingTime from trace header (bytes 109-110, in milliseconds per SEG-Y standard)
+                    delay_ms = trace_header[segyio.TraceField.DelayRecordingTime]
+                    if delay_ms > 0:
+                        time_delays_seconds[i] = delay_ms / 1000.0  # Convert milliseconds to seconds
+                    x, y = trace_header[segyio.TraceField.CDP_X], trace_header[segyio.TraceField.CDP_Y]
+                    if np.isnan(x) or np.isnan(y) or (x == 0 and y == 0):
+                        continue
+                    count_valid_coords += 1
+                    scalar = trace_header[segyio.TraceField.SourceGroupScalar]
+                    if scalar < 0:
+                        x /= abs(scalar)
+                        y /= abs(scalar)
+                    elif scalar > 0:
+                        x *= float(scalar)
+                        y *= float(scalar)
+                    else:
+                        pass
+                    coord_units = trace_header[segyio.TraceField.CoordinateUnits]
+                    if coord_units in segy_coord_unit_map:
+                        if segy_coord_unit_map[coord_units] == "length":
+                            x *= convert_2_mks
+                            y *= convert_2_mks
+                            pass
+                        pass
+                    coords[i] = [x, y]
+
+                if not count_valid_coords:
+                    return False, "No trace coordinates found in SEGY file"
+                # interpolate nan values in coords
+                arrange_indices = np.arange(num_traces)
+                is_nan_coords = np.isnan(coords[:, 0]) | np.isnan(coords[:, 1])
+                coords[is_nan_coords] = np.interp(arrange_indices[is_nan_coords], arrange_indices[~is_nan_coords], coords[~is_nan_coords])
+                self._trace_coords = coords
+                is_nan_time_delays = np.isnan(time_delays_seconds)
+                time_delays_seconds[is_nan_time_delays] = np.interp(arrange_indices[is_nan_time_delays], arrange_indices[~is_nan_time_delays], time_delays_seconds[~is_nan_time_delays])
+                self._trace_time_delays_seconds = time_delays_seconds
+                self._sample_min_seconds = np.median(time_delays_seconds)
+        except Exception as e:
+            return False, f"Error loading SEGY file: {e}"
+
+        return True, ""
+
+
+    def _load_mala_data(self, filename: str) -> tuple[bool, str]:
+        try:
+            file_base, _ = os.path.splitext(filename)
+            data, info = readMALA(file_base)
+            self._data = np.array(data)
+
+            # Extract metadata from MALA header
+            # Calculate sample interval (dt) from TIMEWINDOW and SAMPLES
+            # TIMEWINDOW is in nanoseconds
+            timewindow_ns = float(info.get('TIMEWINDOW', 0))
+            samples = self._data.shape[0]
+            if timewindow_ns > 0 and samples > 1:
+                dt_ns = timewindow_ns / (samples - 1)
+                self._sample_interval_seconds = dt_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
+            else:
+                self._sample_interval_seconds = 1.0
+
+            # MALA is typically time-based (GPR data)
+            self._is_depth = False
+
+            # Extract signal position (time zero offset) from MALA header
+            # SIGNAL POSITION is in nanoseconds
+            signal_position_ns = float(info.get('SIGNAL POSITION', 0))
+            self._sample_min_seconds = signal_position_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
+
+            # Distance interval from MALA header
+            distance_interval = float(info.get('DISTANCE INTERVAL', 0))
+            if distance_interval <= 0:
+                return False, "Distance interval is not set in MALA file"
+            num_traces = self._data.shape[1]
+            # Create linear coordinates based on distance interval
+            x_coords = np.arange(num_traces) * distance_interval
+            self._trace_coords = np.column_stack([x_coords, np.zeros(num_traces)])
+            self._trace_time_delays_seconds = np.full(num_traces, fill_value=self._sample_min_seconds)
+        except Exception as e:
+            return False, f"Error loading MALA file: {e}"
+
+        return True, ""
 
 
     def canvas_render(self) -> None:
         """Render the seismic data to the canvas."""
         if self._data is None:
             return
+
+        # Save current zoom state before clearing
+        xlim = self._axes.get_xlim()
+        ylim = self._axes.get_ylim()
+
         self.remove_colorbar()
         self.remove_colorbar_indicator()
 
         self._axes.clear()
+
+        # Restore zoom or set initial limits for new data
+        if xlim == (0.0, 1.0):  # Default uninitialized state
+            self._axes.set_xlim(-0.5, self._data.shape[1] - 0.5)
+            self._axes.set_ylim(self._data.shape[0] - 0.5, -0.5)
+        else:
+            self._axes.set_xlim(xlim)
+            self._axes.set_ylim(ylim)
 
         self._apply_display_settings()
         self._adjust_layout_with_fixed_margins()
@@ -1157,67 +1179,6 @@ class SeismicSubWindow(UASSubWindow):
         self._settings_dialog = None
 
 
-    def _apply_tick_settings(self, axis: plt.Axes, axis_type: AxisType, major_tick_distance: float, minor_ticks_per_major: int) -> None:
-        """
-        Apply tick settings to an axis with a reference offset.
-
-        Args:
-            axis: matplotlib axis object (e.g., self._axes.xaxis or self._axes.yaxis)
-            axis_type: AxisType for the axis
-            axis_geometry: Tuple containing the axis minimum, step, and number of samples
-            major_tick_distance: Distance between major ticks (0 = auto)
-            minor_ticks_per_major: Number of minor ticks between major ticks (0 = none)
-            offset: Reference point for tick alignment (default: 0.0)
-        """
-        label = axis_type_to_label[axis_type]
-        axis_unit_label = self._get_unit_label(axis_type)
-        if axis_unit_label:
-            label = f"{label} [{axis_unit_label}]"
-        axis.set_label_text(label)
-        if major_tick_distance <= 0:
-            axis.set_major_locator(plt.NullLocator())
-            axis.set_minor_locator(plt.NullLocator())
-            return
-
-        def n_ticks(view_val, distance) -> int:
-            # Calculate tick multiplier for exact multiples of distance
-            # Uses int() truncation to only include ticks at 0, ±distance, ±2*distance, etc.
-            # Example: view_val=-10, distance=25 -> returns 0 (no tick at -25 since -10 > -25)
-            #          view_val=-30, distance=25 -> returns -1 (includes tick at -25)
-            return int(abs(view_val) / distance) * int(np.sign(view_val))
-
-        axis_min, axis_step, axis_num_samples = self._get_axis_geometry(axis_type)
-        axis_max = axis_min + axis_step * (axis_num_samples - 1)
-
-        # Calculate tick positions in display units
-        n_min = n_ticks(axis_min, major_tick_distance)
-        n_max = n_ticks(axis_max, major_tick_distance)
-        major_tick_values = np.arange(n_min, n_max + 1) * major_tick_distance
-
-        # Convert display unit positions to data coordinates (pixel indices)
-        major_tick_positions = (major_tick_values - axis_min) / axis_step
-
-        # Set ticks at data coordinate positions with display unit labels
-        axis.set_ticks(major_tick_positions)
-        axis.set_ticklabels([f'{val:.3g}' for val in major_tick_values])
-
-        if minor_ticks_per_major < 2:
-            axis.set_minor_locator(plt.NullLocator())
-            return
-
-        # Calculate minor tick positions
-        minor_tick_distance = major_tick_distance / minor_ticks_per_major
-        n_min_minor = n_ticks(axis_min, minor_tick_distance)
-        n_max_minor = n_ticks(axis_max, minor_tick_distance)
-        minor_tick_values = [i * minor_tick_distance for i in range(n_min_minor, n_max_minor + 1)
-                            if i % minor_ticks_per_major != 0]
-
-        # Convert to data coordinates
-        minor_tick_positions = [(val - axis_min) / axis_step for val in minor_tick_values]
-        axis.set_ticks(minor_tick_positions, minor=True)
-
-
-
     def _apply_display_settings(self) -> None:
         """Apply the display settings to the axes."""
         if self._data is None:
@@ -1318,6 +1279,78 @@ class SeismicSubWindow(UASSubWindow):
             else:
                 self._colorbar_axes = self._fig.axes[1]
         return True
+
+
+    def _apply_tick_settings(self, axis: plt.Axes, axis_type: AxisType, major_tick_distance: float, minor_ticks_per_major: int) -> None:
+        """
+        Apply tick settings to an axis with a reference offset.
+
+        Args:
+            axis: matplotlib axis object (e.g., self._axes.xaxis or self._axes.yaxis)
+            axis_type: AxisType for the axis
+            axis_geometry: Tuple containing the axis minimum, step, and number of samples
+            major_tick_distance: Distance between major ticks (0 = auto)
+            minor_ticks_per_major: Number of minor ticks between major ticks (0 = none)
+            offset: Reference point for tick alignment (default: 0.0)
+        """
+        label = axis_type_to_label[axis_type]
+        axis_unit_label = self._get_unit_label(axis_type)
+        if axis_unit_label:
+            label = f"{label} [{axis_unit_label}]"
+        axis.set_label_text(label)
+
+        def n_ticks(view_val, distance) -> int:
+            # Calculate tick multiplier for exact multiples of distance
+            # Uses int() truncation to only include ticks at 0, ±distance, ±2*distance, etc.
+            # Example: view_val=-10, distance=25 -> returns 0 (no tick at -25 since -10 > -25)
+            #          view_val=-30, distance=25 -> returns -1 (includes tick at -25)
+            return int(abs(view_val) / distance) * int(np.sign(view_val))
+
+        # For distance axis, convert pixel indices to distance values in tick labels
+        if axis_type == AxisType.DISTANCE:
+            def format_distance(x, pos):
+                # x is pixel index, convert to distance
+                ix = int(x+0.5)
+                ix = max(0, min(ix, len(self._trace_cumulative_distances) - 1))
+                distance = self._trace_cumulative_distances[ix] * GlobalSettings.display_length_factor
+                return f'{distance:.3g}'
+            axis.set_major_formatter(FuncFormatter(format_distance))
+
+        axis_min, axis_step, axis_num_samples = self._get_axis_geometry(axis_type)
+        axis_max = axis_min + axis_step * (axis_num_samples - 1)
+
+        # Calculate tick positions in display units
+        n_min = n_ticks(axis_min, major_tick_distance)
+        n_max = n_ticks(axis_max, major_tick_distance)
+        if n_min >= n_max:
+            # Use automatic tick placement with custom formatter for distance axis
+            axis.set_major_locator(plt.AutoLocator())
+            axis.set_minor_locator(AutoMinorLocator())
+            return
+
+        major_tick_values = np.arange(n_min, n_max + 1) * major_tick_distance
+
+        # Convert display unit positions to data coordinates (pixel indices)
+        major_tick_positions = (major_tick_values - axis_min) / axis_step
+
+        # Set ticks at data coordinate positions with display unit labels
+        axis.set_ticks(major_tick_positions)
+        axis.set_ticklabels([f'{val:.3g}' for val in major_tick_values])
+
+        if minor_ticks_per_major < 2:
+            axis.set_minor_locator(plt.NullLocator())
+            return
+
+        # Calculate minor tick positions
+        minor_tick_distance = major_tick_distance / minor_ticks_per_major
+        n_min_minor = n_ticks(axis_min, minor_tick_distance)
+        n_max_minor = n_ticks(axis_max, minor_tick_distance)
+        minor_tick_values = [i * minor_tick_distance for i in range(n_min_minor, n_max_minor + 1)
+                            if i % minor_ticks_per_major != 0]
+
+        # Convert to data coordinates
+        minor_tick_positions = [(val - axis_min) / axis_step for val in minor_tick_values]
+        axis.set_ticks(minor_tick_positions, minor=True)
 
 
     def _save_segy(self) -> None:
