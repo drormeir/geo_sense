@@ -93,7 +93,7 @@ class DisplaySettingsDialog(QDialog):
         top_layout = QHBoxLayout()
         self.top_combo = QComboBox()
         self.top_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
-        self.top_combo.setCurrentText(current_settings.get('top', AxisType.NONE).value)
+        self.top_combo.setCurrentText(current_settings.get('top', DisplaySettingsDialog.default_settings['top']).value)
         self.top_combo.currentIndexChanged.connect(self._on_setting_changed)
         top_layout.addWidget(self.top_combo)
         top_layout.addWidget(QLabel("Major tick:"))
@@ -113,7 +113,7 @@ class DisplaySettingsDialog(QDialog):
         bottom_layout = QHBoxLayout()
         self.bottom_combo = QComboBox()
         self.bottom_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
-        self.bottom_combo.setCurrentText(current_settings.get('bottom', AxisType.DISTANCE).value)
+        self.bottom_combo.setCurrentText(current_settings.get('bottom', DisplaySettingsDialog.default_settings['bottom']).value)
         self.bottom_combo.currentIndexChanged.connect(self._on_setting_changed)
         bottom_layout.addWidget(self.bottom_combo)
         bottom_layout.addWidget(QLabel("Major tick:"))
@@ -135,7 +135,7 @@ class DisplaySettingsDialog(QDialog):
         left_layout = QHBoxLayout()
         self.left_combo = QComboBox()
         self.left_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
-        self.left_combo.setCurrentText(current_settings.get('left', AxisType.SAMPLE).value)
+        self.left_combo.setCurrentText(current_settings.get('left', DisplaySettingsDialog.default_settings['left']).value)
         self.left_combo.currentIndexChanged.connect(self._on_setting_changed)
         left_layout.addWidget(self.left_combo)
         left_layout.addWidget(QLabel("Major tick:"))
@@ -155,7 +155,7 @@ class DisplaySettingsDialog(QDialog):
         right_layout = QHBoxLayout()
         self.right_combo = QComboBox()
         self.right_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
-        self.right_combo.setCurrentText(current_settings.get('right', AxisType.NONE).value)
+        self.right_combo.setCurrentText(current_settings.get('right', DisplaySettingsDialog.default_settings['right']).value)
         self.right_combo.currentIndexChanged.connect(self._on_setting_changed)
         right_layout.addWidget(self.right_combo)
         right_layout.addWidget(QLabel("Major tick:"))
@@ -181,25 +181,25 @@ class DisplaySettingsDialog(QDialog):
         # Common colormaps
         self.colormap_combo = QComboBox()
         self.colormap_combo.addItems(DisplaySettingsDialog.colormap_options)
-        self.colormap_combo.setCurrentText(current_settings.get('colormap', 'seismic'))
+        self.colormap_combo.setCurrentText(current_settings.get('colormap', DisplaySettingsDialog.default_settings['colormap']))
         self.colormap_combo.currentIndexChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("Color scheme:", self.colormap_combo)
 
         # Flip colormap checkbox
         self.flip_colormap_checkbox = QCheckBox("Flip colormap")
-        self.flip_colormap_checkbox.setChecked(current_settings.get('flip_colormap', False))
+        self.flip_colormap_checkbox.setChecked(current_settings.get('flip_colormap', DisplaySettingsDialog.default_settings['flip_colormap']))
         self.flip_colormap_checkbox.stateChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("", self.flip_colormap_checkbox)
 
         # Colorbar visible checkbox
         self.colorbar_visible_checkbox = QCheckBox("Show Colorbar")
-        self.colorbar_visible_checkbox.setChecked(current_settings.get('colorbar_visible', True))
+        self.colorbar_visible_checkbox.setChecked(current_settings.get('colorbar_visible', DisplaySettingsDialog.default_settings['colorbar_visible']))
         self.colorbar_visible_checkbox.stateChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("", self.colorbar_visible_checkbox)
 
         # File name in plot checkbox
         self.file_name_in_plot_checkbox = QCheckBox("Show file name in plot")
-        self.file_name_in_plot_checkbox.setChecked(current_settings.get('file_name_in_plot', True))
+        self.file_name_in_plot_checkbox.setChecked(current_settings.get('file_name_in_plot', DisplaySettingsDialog.default_settings['file_name_in_plot']))
         self.file_name_in_plot_checkbox.stateChanged.connect(self._on_setting_changed)
         colormap_layout.addRow("", self.file_name_in_plot_checkbox)
 
@@ -293,12 +293,12 @@ class SeismicSubWindow(UASSubWindow):
 
         # Metadata fields
         self._trace_coords: np.ndarray | None = None
+        self._trace_cumulative_distances: np.ndarray | None = None
         self._sample_interval_seconds: float = 1.0
         self._sample_min_seconds: float = 0.0
         self._z_display_units: str = ""
         self._z_display_value_factor: float = 1.0
         self._is_depth: bool = False
-        self._distance_unit: str = "trace"
 
         # Zoom state
         self._zoom_active: bool = False
@@ -690,22 +690,12 @@ class SeismicSubWindow(UASSubWindow):
         }
 
         # Calculate horizontal distance
-        if self._trace_coords is not None and x < len(self._trace_coords):
-            if x == 0:
-                horizontal_distance = 0.0
-            else:
-                # Calculate cumulative distance along the line
-                coord_current = self._trace_coords[x]
-                coord_prev = self._trace_coords[0]
-                horizontal_distance = np.sqrt(
-                    (coord_current[0] - coord_prev[0])**2 +
-                    (coord_current[1] - coord_prev[1])**2
-                )
+        if self._trace_cumulative_distances is not None and x < len(self._trace_cumulative_distances):
+            # Use pre-calculated cumulative distance along the survey line
+            horizontal_distance = self._trace_cumulative_distances[x]
             hover_info['horizontal_distance'] = horizontal_distance
         else:
             hover_info['horizontal_distance'] = float(x)
-
-        hover_info['distance_unit'] = self._distance_unit
 
         return hover_info
 
@@ -732,8 +722,13 @@ class SeismicSubWindow(UASSubWindow):
             settings = state['display_settings']
             # Convert string values back to AxisType enums
             for key in ['top', 'bottom', 'left', 'right']:
-                if key in settings and isinstance(settings[key], str):
+                if key not in settings or not isinstance(settings[key], str):
+                    settings[key] = DisplaySettingsDialog.default_settings[key]
+                    continue
+                try:
                     settings[key] = AxisType(settings[key])
+                except ValueError:
+                    settings[key] = DisplaySettingsDialog.default_settings[key]
             self._display_settings = settings
         self.load_file(state.get("filename", ""))
 
@@ -847,22 +842,67 @@ class SeismicSubWindow(UASSubWindow):
                     try:
                         num_traces = len(f.trace)
                         coords = np.zeros((num_traces, 2))
+
+                        # Read coordinate scalar from first trace (assumed constant for all traces)
+                        scalar = f.header[0][segyio.TraceField.SourceGroupScalar]
+                        if scalar < 0:
+                            scale_factor = 1.0 / abs(scalar)
+                        elif scalar > 0:
+                            scale_factor = float(scalar)
+                        else:
+                            scale_factor = 1.0
+
+                        # Read coordinate units from first trace
+                        coord_units = f.header[0][segyio.TraceField.CoordinateUnits]
+
+                        # Read measurement system from binary header (bytes 3255-3256)
+                        # 1 = meters, 2 = feet
+                        measurement_system = f.bin[segyio.BinField.MeasurementSystem]
+
                         for i in range(num_traces):
-                            # CDP X and Y coordinates (scaled)
-                            x = f.header[i][segyio.TraceField.CDP_X]
-                            y = f.header[i][segyio.TraceField.CDP_Y]
+                            # CDP X and Y coordinates with scalar applied
+                            x = f.header[i][segyio.TraceField.CDP_X] * scale_factor
+                            y = f.header[i][segyio.TraceField.CDP_Y] * scale_factor
                             coords[i] = [x, y]
 
                         # Only use coordinates if they're not all zeros
                         if np.any(coords):
                             self._trace_coords = coords
-                            self._distance_unit = "m"
+
+                            # Calculate cumulative distances along the survey line
+                            # Distance from trace i-1 to trace i for each trace
+                            trace_distances = np.sqrt(np.sum(np.diff(coords, axis=0)**2, axis=1))
+                            # Cumulative sum with 0.0 prepended for first trace
+                            self._trace_cumulative_distances = np.cumsum(np.concatenate([[0.0], trace_distances]))
+
+                            # Set distance unit based on coordinate units field
+                            # 1 = Length (meters or feet), 2 = Seconds of arc, 3 = Decimal degrees, 4 = DMS
+                            if coord_units == 1:
+                                # Use measurement system to distinguish meters vs feet
+                                if measurement_system == 2:
+                                    self._distance_unit = "ft"
+                                else:
+                                    self._distance_unit = "m"  # Default to meters (measurement_system == 1 or 0)
+                            elif coord_units == 2:
+                                self._distance_unit = "arcsec"
+                            elif coord_units == 3:
+                                self._distance_unit = "deg"
+                            elif coord_units == 4:
+                                self._distance_unit = "DMS"
+                            else:
+                                # Default to meters if coordinate units is unknown
+                                if measurement_system == 2:
+                                    self._distance_unit = "ft"
+                                else:
+                                    self._distance_unit = "m"
                         else:
                             self._trace_coords = None
+                            self._trace_cumulative_distances = None
                             self._distance_unit = "trace"
                     except Exception as e:
                         print(f"Error extracting trace coordinates: {e}")
                         self._trace_coords = None
+                        self._trace_cumulative_distances = None
                         self._distance_unit = "trace"
 
             else:
@@ -875,8 +915,9 @@ class SeismicSubWindow(UASSubWindow):
                 # TIMEWINDOW is in nanoseconds
                 timewindow_ns = float(info.get('TIMEWINDOW', 0))
                 samples = self._data.shape[0]
-                if timewindow_ns > 0 and samples > 0:
-                    self._sample_interval_seconds = (timewindow_ns / samples) / 1_000_000_000.0  # Convert nanoseconds to seconds
+                if timewindow_ns > 0 and samples > 1:
+                    dt_ns = timewindow_ns / (samples - 1)
+                    self._sample_interval_seconds = dt_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
                 else:
                     self._sample_interval_seconds = 1.0
 
@@ -893,12 +934,13 @@ class SeismicSubWindow(UASSubWindow):
                 if distance_interval > 0:
                     num_traces = self._data.shape[1]
                     # Create linear coordinates based on distance interval
-                    distances = np.arange(num_traces) * distance_interval
-                    self._trace_coords = np.column_stack([distances, np.zeros(num_traces)])
-                    self._distance_unit = "m"
+                    x_coords = np.arange(num_traces) * distance_interval
+                    self._trace_coords = np.column_stack([x_coords, np.zeros(num_traces)])
+                    # For MALA with uniform spacing, cumulative distances are just the distances
+                    self._trace_cumulative_distances = np.concatenate([x_coords, [x_coords[-1] + distance_interval]])
                 else:
                     self._trace_coords = None
-                    self._distance_unit = "trace"
+                    self._trace_cumulative_distances = None
 
             self._filename = filename
             percentile = np.percentile(np.abs(self._data), 95)
@@ -910,6 +952,7 @@ class SeismicSubWindow(UASSubWindow):
             self.remove_colorbar_indicator()
             self.remove_colorbar()
             self._trace_coords = None
+            self._trace_cumulative_distances = None
             self._distance_unit = "trace"
             self._sample_interval_seconds = 1.0
             self._sample_min_seconds = 0.0
@@ -1145,7 +1188,6 @@ class SeismicSubWindow(UASSubWindow):
 
         axis_min, axis_step, axis_num_samples = self._get_axis_geometry(axis_type)
         axis_max = axis_min + axis_step * (axis_num_samples - 1)
-        print(f"axis_min: {axis_min}, axis_max: {axis_max}, axis_step: {axis_step}, axis_num_samples: {axis_num_samples}")
 
         # Calculate tick positions in display units
         n_min = n_ticks(axis_min, major_tick_distance)
