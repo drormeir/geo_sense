@@ -4,16 +4,14 @@ from typing import Any
 from enum import Enum
 
 from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox, QCheckBox, QSpinBox, QDoubleSpinBox, QHBoxLayout, QLabel
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
-from matplotlib.backend_bases import NavigationToolbar2
-from matplotlib.ticker import MultipleLocator, AutoMinorLocator, FuncFormatter
-from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.ticker import AutoMinorLocator, FuncFormatter
 from uas import UASSubWindow, UASMainWindow, auto_register
 
 import segyio
@@ -320,7 +318,10 @@ class SeismicSubWindow(UASSubWindow):
         self.create_subplots()
         self._canvas = FigureCanvasQTAgg(self._fig)
 
-        # Create toolbar
+        # Create matplotlib navigation toolbar (for pan/zoom)
+        self._nav_toolbar = NavigationToolbar2QT(self._canvas, self)
+
+        # Create custom toolbar for zoom toggle
         self._toolbar = QToolBar("Seismic Toolbar", self)
         self._setup_toolbar()
 
@@ -328,6 +329,7 @@ class SeismicSubWindow(UASSubWindow):
         layout.setContentsMargins(0, 0, 0, 0)
 
         layout.addWidget(self._toolbar)
+        layout.addWidget(self._nav_toolbar)
         layout.addWidget(self._canvas)
 
         self.setMinimumSize(400, 300)
