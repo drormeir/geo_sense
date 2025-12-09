@@ -190,22 +190,39 @@ class SeismicMainWindow(UASMainWindow):
         # Format the status message
         parts = []
 
+        def format_value(value: float|int, decimals_digits: int=3, units: str='', min_decimal_digits: int=0) -> str:
+            if isinstance(value, int):
+                ret = f"{value}"
+            else:
+                while True:
+                    ret = f"{value:.{decimals_digits}f}"
+                    if not ret.endswith('0'):
+                        break
+                    if decimals_digits <= min_decimal_digits:
+                        break
+                    decimals_digits -= 1
+                if ret.endswith('.'):
+                    ret = ret[:-1]
+            if units:
+                ret += f" [{units}]"
+            return ret
+
         if 'trace_number' in hover_info:
-            parts.append(f"Trace: {hover_info['trace_number']}")
+            parts.append(f"Trace: {format_value(hover_info['trace_number'])}")
 
         distance = hover_info.get('distance', None)
         if distance is not None:
-            parts.append(f"Distance: {distance:.2f} [{GlobalSettings.display_length_unit}]")
+            parts.append(f"Distance: {format_value(distance, 2, units=GlobalSettings.display_length_unit)}")
 
         if 'sample_number' in hover_info:
-            parts.append(f"Sample: {hover_info['sample_number']}")
+            parts.append(f"Sample: {format_value(hover_info['sample_number'])}")
 
         if 'z_value' in hover_info and 'z_units' in hover_info:
             label = "Depth" if hover_info.get('is_depth', False) else "Time"
-            parts.append(f"{label}: {hover_info['z_value']:.3f} [{hover_info['z_units']}]")
+            parts.append(f"{label}: {format_value(hover_info['z_value'], 3, units=hover_info['z_units'])}")
 
         if 'amplitude' in hover_info:
-            parts.append(f"Amplitude: {hover_info['amplitude']:.3f}")
+            parts.append(f"Amplitude: {format_value(hover_info['amplitude'], 3, units='mV')}")
 
         status_message = " | ".join(parts)
         self._status_bar.showMessage(status_message)
