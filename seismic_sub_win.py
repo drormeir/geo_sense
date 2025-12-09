@@ -3,7 +3,7 @@ import os
 from typing import Any
 from enum import Enum
 
-from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox, QCheckBox, QSpinBox, QDoubleSpinBox, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox, QCheckBox, QSpinBox, QDoubleSpinBox, QHBoxLayout, QLabel, QGridLayout
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
@@ -83,126 +83,132 @@ class DisplaySettingsDialog(QDialog):
         # Create layout
         layout = QVBoxLayout(self)
 
-        # Create form layout for axes settings
-        form_layout = QFormLayout()
+        # Create grid layout for axes settings (table format without titles)
+        axes_group = QGroupBox("Axes properties")
+        grid_layout = QGridLayout()
 
-        # Top and Bottom axes (horizontal)
-
-        top_layout = QHBoxLayout()
+        # Row 0: Top axis
+        grid_layout.addWidget(QLabel("Top:"), 0, 0)
         self.top_combo = QComboBox()
         self.top_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
         self.top_combo.setCurrentText(current_settings.get('top', DisplaySettingsDialog.default_settings['top']).value)
         self.top_combo.currentIndexChanged.connect(self._on_setting_changed)
-        top_layout.addWidget(self.top_combo)
-        top_layout.addWidget(QLabel("Major tick:"))
-        self.top_major_tick = QDoubleSpinBox()
+        grid_layout.addWidget(self.top_combo, 0, 1)
+        grid_layout.addWidget(QLabel("Major tick:"), 0, 2)
+        self.top_major_tick = QSpinBox()
         self.top_major_tick.setRange(0, 10000)
         self.top_major_tick.setValue(current_settings['top_major_tick'])
         self.top_major_tick.valueChanged.connect(self._on_setting_changed)
-        top_layout.addWidget(self.top_major_tick)
-        top_layout.addWidget(QLabel("Minor/major:"))
+        grid_layout.addWidget(self.top_major_tick, 0, 3)
+        grid_layout.addWidget(QLabel("Minor ticks per major:"), 0, 4)
         self.top_minor_ticks = QSpinBox()
         self.top_minor_ticks.setRange(0, 100)
         self.top_minor_ticks.setValue(current_settings['top_minor_ticks'])
         self.top_minor_ticks.valueChanged.connect(self._on_setting_changed)
-        top_layout.addWidget(self.top_minor_ticks)
-        form_layout.addRow("Top axis:", top_layout)
+        grid_layout.addWidget(self.top_minor_ticks, 0, 5)
 
-        bottom_layout = QHBoxLayout()
+        # Row 1: Bottom axis
+        grid_layout.addWidget(QLabel("Bottom:"), 1, 0)
         self.bottom_combo = QComboBox()
         self.bottom_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
         self.bottom_combo.setCurrentText(current_settings.get('bottom', DisplaySettingsDialog.default_settings['bottom']).value)
         self.bottom_combo.currentIndexChanged.connect(self._on_setting_changed)
-        bottom_layout.addWidget(self.bottom_combo)
-        bottom_layout.addWidget(QLabel("Major tick:"))
-        self.bottom_major_tick = QDoubleSpinBox()
+        grid_layout.addWidget(self.bottom_combo, 1, 1)
+        grid_layout.addWidget(QLabel("Major tick:"), 1, 2)
+        self.bottom_major_tick = QSpinBox()
         self.bottom_major_tick.setRange(0, 10000)
         self.bottom_major_tick.setValue(current_settings['bottom_major_tick'])
         self.bottom_major_tick.valueChanged.connect(self._on_setting_changed)
-        bottom_layout.addWidget(self.bottom_major_tick)
-        bottom_layout.addWidget(QLabel("Minor/major:"))
+        grid_layout.addWidget(self.bottom_major_tick, 1, 3)
+        grid_layout.addWidget(QLabel("Minor ticks per major:"), 1, 4)
         self.bottom_minor_ticks = QSpinBox()
         self.bottom_minor_ticks.setRange(0, 100)
         self.bottom_minor_ticks.setValue(current_settings['bottom_minor_ticks'])
         self.bottom_minor_ticks.valueChanged.connect(self._on_setting_changed)
-        bottom_layout.addWidget(self.bottom_minor_ticks)
-        form_layout.addRow("Bottom axis:", bottom_layout)
+        grid_layout.addWidget(self.bottom_minor_ticks, 1, 5)
 
-        # Left and Right axes (vertical)
-
-        left_layout = QHBoxLayout()
+        # Row 2: Left axis
+        grid_layout.addWidget(QLabel("Left:"), 2, 0)
         self.left_combo = QComboBox()
         self.left_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
         self.left_combo.setCurrentText(current_settings.get('left', DisplaySettingsDialog.default_settings['left']).value)
         self.left_combo.currentIndexChanged.connect(self._on_setting_changed)
-        left_layout.addWidget(self.left_combo)
-        left_layout.addWidget(QLabel("Major tick:"))
-        self.left_major_tick = QDoubleSpinBox()
+        grid_layout.addWidget(self.left_combo, 2, 1)
+        grid_layout.addWidget(QLabel("Major tick:"), 2, 2)
+        self.left_major_tick = QSpinBox()
         self.left_major_tick.setRange(0, 10000)
         self.left_major_tick.setValue(current_settings['left_major_tick'])
         self.left_major_tick.valueChanged.connect(self._on_setting_changed)
-        left_layout.addWidget(self.left_major_tick)
-        left_layout.addWidget(QLabel("Minor/major:"))
+        grid_layout.addWidget(self.left_major_tick, 2, 3)
+        grid_layout.addWidget(QLabel("Minor ticks per major:"), 2, 4)
         self.left_minor_ticks = QSpinBox()
         self.left_minor_ticks.setRange(0, 100)
         self.left_minor_ticks.setValue(current_settings['left_minor_ticks'])
         self.left_minor_ticks.valueChanged.connect(self._on_setting_changed)
-        left_layout.addWidget(self.left_minor_ticks)
-        form_layout.addRow("Left axis:", left_layout)
+        grid_layout.addWidget(self.left_minor_ticks, 2, 5)
 
-        right_layout = QHBoxLayout()
+        # Row 3: Right axis
+        grid_layout.addWidget(QLabel("Right:"), 3, 0)
         self.right_combo = QComboBox()
         self.right_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
         self.right_combo.setCurrentText(current_settings.get('right', DisplaySettingsDialog.default_settings['right']).value)
         self.right_combo.currentIndexChanged.connect(self._on_setting_changed)
-        right_layout.addWidget(self.right_combo)
-        right_layout.addWidget(QLabel("Major tick:"))
-        self.right_major_tick = QDoubleSpinBox()
+        grid_layout.addWidget(self.right_combo, 3, 1)
+        grid_layout.addWidget(QLabel("Major tick:"), 3, 2)
+        self.right_major_tick = QSpinBox()
         self.right_major_tick.setRange(0, 10000)
         self.right_major_tick.setValue(current_settings['right_major_tick'])
         self.right_major_tick.valueChanged.connect(self._on_setting_changed)
-        right_layout.addWidget(self.right_major_tick)
-        right_layout.addWidget(QLabel("Minor/major:"))
+        grid_layout.addWidget(self.right_major_tick, 3, 3)
+        grid_layout.addWidget(QLabel("Minor ticks per major:"), 3, 4)
         self.right_minor_ticks = QSpinBox()
         self.right_minor_ticks.setRange(0, 100)
         self.right_minor_ticks.setValue(current_settings['right_minor_ticks'])
         self.right_minor_ticks.valueChanged.connect(self._on_setting_changed)
-        right_layout.addWidget(self.right_minor_ticks)
-        form_layout.addRow("Right axis:", right_layout)
+        grid_layout.addWidget(self.right_minor_ticks, 3, 5)
 
-        layout.addLayout(form_layout)
+        axes_group.setLayout(grid_layout)
+        layout.addWidget(axes_group)
 
         # Colormap selection
-        colormap_group = QGroupBox("Colormap")
-        colormap_layout = QFormLayout()
+        colormap_group = QGroupBox("Colormap properties")
+        
+        colormap_layout = QHBoxLayout()
+
+        # Colorbar visible checkbox
+        show_colorbar_layout = QHBoxLayout(alignment=Qt.AlignCenter)
+        self.colorbar_visible_checkbox = QCheckBox("Show Colorbar")
+        self.colorbar_visible_checkbox.setChecked(current_settings.get('colorbar_visible', DisplaySettingsDialog.default_settings['colorbar_visible']))
+        self.colorbar_visible_checkbox.stateChanged.connect(self._on_setting_changed)
+        show_colorbar_layout.addWidget(self.colorbar_visible_checkbox)
+        colormap_layout.addLayout(show_colorbar_layout)
 
         # Common colormaps
+        colorscheme_layout = QHBoxLayout(alignment=Qt.AlignCenter)
+        colorscheme_layout.addWidget(QLabel("Color scheme:"))
         self.colormap_combo = QComboBox()
         self.colormap_combo.addItems(DisplaySettingsDialog.colormap_options)
         self.colormap_combo.setCurrentText(current_settings.get('colormap', DisplaySettingsDialog.default_settings['colormap']))
         self.colormap_combo.currentIndexChanged.connect(self._on_setting_changed)
-        colormap_layout.addRow("Color scheme:", self.colormap_combo)
+        colorscheme_layout.addWidget(self.colormap_combo)
+        colormap_layout.addLayout(colorscheme_layout)
 
         # Flip colormap checkbox
+        flip_checkbox_layout = QHBoxLayout(alignment=Qt.AlignCenter)
         self.flip_colormap_checkbox = QCheckBox("Flip colormap")
         self.flip_colormap_checkbox.setChecked(current_settings.get('flip_colormap', DisplaySettingsDialog.default_settings['flip_colormap']))
         self.flip_colormap_checkbox.stateChanged.connect(self._on_setting_changed)
-        colormap_layout.addRow("", self.flip_colormap_checkbox)
+        flip_checkbox_layout.addWidget(self.flip_colormap_checkbox)
+        colormap_layout.addLayout(flip_checkbox_layout)
 
-        # Colorbar visible checkbox
-        self.colorbar_visible_checkbox = QCheckBox("Show Colorbar")
-        self.colorbar_visible_checkbox.setChecked(current_settings.get('colorbar_visible', DisplaySettingsDialog.default_settings['colorbar_visible']))
-        self.colorbar_visible_checkbox.stateChanged.connect(self._on_setting_changed)
-        colormap_layout.addRow("", self.colorbar_visible_checkbox)
+        colormap_group.setLayout(colormap_layout)
+        layout.addWidget(colormap_group)
 
         # File name in plot checkbox
         self.file_name_in_plot_checkbox = QCheckBox("Show file name in plot")
         self.file_name_in_plot_checkbox.setChecked(current_settings.get('file_name_in_plot', DisplaySettingsDialog.default_settings['file_name_in_plot']))
         self.file_name_in_plot_checkbox.stateChanged.connect(self._on_setting_changed)
-        colormap_layout.addRow("", self.file_name_in_plot_checkbox)
-
-        colormap_group.setLayout(colormap_layout)
-        layout.addWidget(colormap_group)
+        layout.addWidget(self.file_name_in_plot_checkbox)
 
         # Dialog buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
