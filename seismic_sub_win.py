@@ -1320,7 +1320,9 @@ class SeismicSubWindow(UASSubWindow):
 
         axis_min, axis_step, axis_num_samples = self._get_axis_geometry(axis_type)
         axis_max = axis_min + axis_step * (axis_num_samples - 1)
-
+        i_major_tick_distance = int(round(major_tick_distance/axis_step))
+        i_major_tick_distance = max(1, min(i_major_tick_distance, axis_num_samples - 1))
+        major_tick_distance = i_major_tick_distance * axis_step
         # Calculate tick positions in display units
         n_min = n_ticks(axis_min, major_tick_distance)
         n_max = n_ticks(axis_max, major_tick_distance)
