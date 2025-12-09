@@ -39,7 +39,7 @@ axis_type_to_label: dict[AxisType, str] = {
 
 class DisplaySettingsDialog(QDialog):
     """
-    Dialog for configuring display axis settings for each border.
+    Dialog for configuring display axis settings for each axis
     """
     default_settings = {
         'top': AxisType.NONE,
@@ -83,10 +83,10 @@ class DisplaySettingsDialog(QDialog):
         # Create layout
         layout = QVBoxLayout(self)
 
-        # Create form layout for border settings
+        # Create form layout for axes settings
         form_layout = QFormLayout()
 
-        # Top and Bottom borders (horizontal)
+        # Top and Bottom axes (horizontal)
 
         top_layout = QHBoxLayout()
         self.top_combo = QComboBox()
@@ -106,7 +106,7 @@ class DisplaySettingsDialog(QDialog):
         self.top_minor_ticks.setValue(current_settings['top_minor_ticks'])
         self.top_minor_ticks.valueChanged.connect(self._on_setting_changed)
         top_layout.addWidget(self.top_minor_ticks)
-        form_layout.addRow("Top border:", top_layout)
+        form_layout.addRow("Top axis:", top_layout)
 
         bottom_layout = QHBoxLayout()
         self.bottom_combo = QComboBox()
@@ -126,9 +126,9 @@ class DisplaySettingsDialog(QDialog):
         self.bottom_minor_ticks.setValue(current_settings['bottom_minor_ticks'])
         self.bottom_minor_ticks.valueChanged.connect(self._on_setting_changed)
         bottom_layout.addWidget(self.bottom_minor_ticks)
-        form_layout.addRow("Bottom border:", bottom_layout)
+        form_layout.addRow("Bottom axis:", bottom_layout)
 
-        # Left and Right borders (vertical)
+        # Left and Right axes (vertical)
 
         left_layout = QHBoxLayout()
         self.left_combo = QComboBox()
@@ -148,7 +148,7 @@ class DisplaySettingsDialog(QDialog):
         self.left_minor_ticks.setValue(current_settings['left_minor_ticks'])
         self.left_minor_ticks.valueChanged.connect(self._on_setting_changed)
         left_layout.addWidget(self.left_minor_ticks)
-        form_layout.addRow("Left border:", left_layout)
+        form_layout.addRow("Left axis:", left_layout)
 
         right_layout = QHBoxLayout()
         self.right_combo = QComboBox()
@@ -168,7 +168,7 @@ class DisplaySettingsDialog(QDialog):
         self.right_minor_ticks.setValue(current_settings['right_minor_ticks'])
         self.right_minor_ticks.valueChanged.connect(self._on_setting_changed)
         right_layout.addWidget(self.right_minor_ticks)
-        form_layout.addRow("Right border:", right_layout)
+        form_layout.addRow("Right axis:", right_layout)
 
         layout.addLayout(form_layout)
 
