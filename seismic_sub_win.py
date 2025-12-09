@@ -326,6 +326,8 @@ class SeismicSubWindow(UASSubWindow):
 
         # Create matplotlib navigation toolbar (for pan/zoom)
         self._nav_toolbar = NavigationToolbar2QT(self._canvas, self)
+        # Hide coordinate display in toolbar
+        self._nav_toolbar.set_message = lambda x: None
 
         # Create custom toolbar for zoom toggle
         self._toolbar = QToolBar("Seismic Toolbar", self)
