@@ -1319,10 +1319,14 @@ class SeismicSubWindow(UASSubWindow):
             axis.set_major_formatter(FuncFormatter(format_distance))
 
         axis_min, axis_step, axis_num_samples = self._get_axis_geometry(axis_type)
+        minor_ticks_per_major = min(minor_ticks_per_major, axis_num_samples)
         axis_max = axis_min + axis_step * (axis_num_samples - 1)
-        i_major_tick_distance = int(round(major_tick_distance/axis_step))
-        i_major_tick_distance = max(1, min(i_major_tick_distance, axis_num_samples - 1))
-        major_tick_distance = i_major_tick_distance * axis_step
+        if major_tick_distance <= axis_step:
+            major_tick_distance = axis_step
+            minor_ticks_per_major = 0
+        if major_tick_distance >= axis_step*(axis_num_samples-1):
+            major_tick_distance = axis_step*(axis_num_samples-1)
+            minor_ticks_per_major = max(min(10,axis_num_samples), minor_ticks_per_major)
         # Calculate tick positions in display units
         n_min = n_ticks(axis_min, major_tick_distance)
         n_max = n_ticks(axis_max, major_tick_distance)
