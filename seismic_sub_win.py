@@ -852,9 +852,8 @@ class SeismicSubWindow(UASSubWindow):
             return False
 
         self._filename = filename
-        percentile = np.percentile(np.abs(self._data), 95)
-        self._amplitude_min = -percentile
-        self._amplitude_max = percentile
+        self._amplitude_min = np.min(self._data)
+        self._amplitude_max = np.max(self._data)
         z_range_seconds = self._data.shape[0] * self._sample_interval_seconds
         if self._sample_min_seconds < 0 or self._sample_min_seconds >= z_range_seconds:
             # default to 10% of the data range
@@ -1200,10 +1199,17 @@ class SeismicSubWindow(UASSubWindow):
         # Add '_r' suffix to flip the colormap
         if flip_colormap:
             colormap = colormap + '_r'
-
         self._image = self._axes.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
         if self.is_colorbar_axes_visible():
-            self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude")
+            self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude [mV]")
+            colorbar_ticks = list(self._colorbar.get_ticks())
+            # assuming the colorbar ticks are already sorted, add min and max if not already present
+            while colorbar_ticks and colorbar_ticks[0] <= self._amplitude_min:
+                colorbar_ticks.pop(0)
+            while colorbar_ticks and colorbar_ticks[-1] >= self._amplitude_max:
+                colorbar_ticks.pop(-1)
+            colorbar_ticks = [self._amplitude_min] + colorbar_ticks + [self._amplitude_max]
+            self._colorbar.set_ticks(colorbar_ticks)
 
         if file_name_in_plot:
             self._axes.set_title(os.path.basename(self._filename))
