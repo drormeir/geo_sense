@@ -217,9 +217,11 @@ class SeismicMainWindow(UASMainWindow):
         if 'sample_number' in hover_info:
             parts.append(f"Sample: {format_value(hover_info['sample_number'])}")
 
-        if 'z_value' in hover_info and 'z_units' in hover_info:
-            label = "Depth" if hover_info.get('is_depth', False) else "Time"
-            parts.append(f"{label}: {format_value(hover_info['z_value'], 3, units=hover_info['z_units'])}")
+        if 'time_value' in hover_info and 'time_units' in hover_info:
+            parts.append(f"Time: {format_value(hover_info['time_value'], 3, units=hover_info['time_units'])}")
+
+        if 'depth_value' in hover_info:
+            parts.append(f"Depth: {format_value(hover_info['depth_value'], 3, units=GlobalSettings.display_length_unit)}")
 
         if 'amplitude' in hover_info:
             parts.append(f"Amplitude: {format_value(hover_info['amplitude'], 3, units='mV')}")

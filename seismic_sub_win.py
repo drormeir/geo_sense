@@ -37,15 +37,35 @@ axis_type_to_label: dict[AxisType, str] = {
     AxisType.TRACE: "Trace Number",
 }
 
+def convert_velocity_to_meters_per_microsecond(velocity: float) -> int:
+    return int(round(velocity / 1_000_000.0))
+
+# Speed of light (for GPR/electromagnetic waves)
+C_VACUUM = 299_792_458.0  # m/s
+C_VACUUM_METERS_PER_MICROSECOND = convert_velocity_to_meters_per_microsecond(C_VACUUM)
+# GPR electromagnetic wave velocities
+GPR_VELOCITY_AIR = C_VACUUM / 1.000293          # ~299,704,645 m/s
+GPR_VELOCITY_WATER = C_VACUUM / 9.0             # ~33,310,273 m/s (at radio frequencies)
+GPR_VELOCITY_SAND = C_VACUUM / 2.0              # ~149,896,229 m/s (dry sand)
+GPR_GROUND_VELOCITY_DEFAULT = C_VACUUM / 3.0    # ~100,000,000 m/s or 0.1 m/ns (typical soil, εr ≈ 9)
+
+# Seismic/acoustic wave velocities (P-wave)
+SEISMIC_P_VELOCITY_AIR = 343.0             # m/s (at 20°C)
+SEISMIC_P_VELOCITY_WATER = 1500.0          # m/s
+SEISMIC_P_VELOCITY_SAND = 400.0            # m/s (dry sand, approximate)
+SEISMIC_P_VELOCITY_SANDSTONE = 2000.0      # m/s (saturated, approximate)
+
+
+
 class DisplaySettingsDialog(QDialog):
     """
     Dialog for configuring display axis settings for each axis
     """
     default_settings = {
-        'top': AxisType.NONE,
-        'bottom': AxisType.DISTANCE,
-        'left': AxisType.SAMPLE,
-        'right': AxisType.NONE,
+        'top': AxisType.DISTANCE,
+        'bottom': AxisType.TRACE,
+        'left': AxisType.TIME,
+        'right': AxisType.DEPTH,
         'colormap': 'seismic',
         'flip_colormap': False,
         'colorbar_visible': True,
@@ -58,6 +78,9 @@ class DisplaySettingsDialog(QDialog):
         'left_minor_ticks': 0,
         'right_major_tick': 0.0,
         'right_minor_ticks': 0,
+        'air_velocity_m_per_s': GPR_VELOCITY_AIR,
+        'ground_velocity_m_per_s': GPR_GROUND_VELOCITY_DEFAULT,
+        'ind_sample_time_first_arrival': 30,
     }
     colormap_options = ["seismic", "gray", "viridis", "plasma", "RdBu", "hot", "coolwarm", "jet"]
     vertical_options = [AxisType.NONE, AxisType.SAMPLE, AxisType.TIME, AxisType.DEPTH]
@@ -73,15 +96,23 @@ class DisplaySettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Display Settings")
         self._parent = parent
-        self._old_settings = dict(current_settings) if current_settings else dict(self.default_settings)
 
         if current_settings is None:
-            current_settings = self.default_settings
+            self._old_settings = dict(self.default_settings)
         else:
-            current_settings = {**self.default_settings, **current_settings}
+            self._old_settings = {**self.default_settings, **current_settings}
+        self._create_layout(self._old_settings)
 
+
+    def _create_layout(self, current_settings: dict[str, Any]) -> None:
         # Create layout
         layout = QVBoxLayout(self)
+
+        # File name in plot checkbox
+        self.file_name_in_plot_checkbox = QCheckBox("Show file name in plot")
+        self.file_name_in_plot_checkbox.setChecked(current_settings['file_name_in_plot'])
+        self.file_name_in_plot_checkbox.stateChanged.connect(self._on_setting_changed)
+        layout.addWidget(self.file_name_in_plot_checkbox)
 
         # Create grid layout for axes settings (table format without titles)
         axes_group = QGroupBox("Axes properties")
@@ -91,7 +122,7 @@ class DisplaySettingsDialog(QDialog):
         grid_layout.addWidget(QLabel("Top:"), 0, 0)
         self.top_combo = QComboBox()
         self.top_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
-        self.top_combo.setCurrentText(current_settings.get('top', DisplaySettingsDialog.default_settings['top']).value)
+        self.top_combo.setCurrentText(current_settings['top'].value)
         self.top_combo.currentIndexChanged.connect(self._on_setting_changed)
         grid_layout.addWidget(self.top_combo, 0, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 0, 2)
@@ -111,7 +142,7 @@ class DisplaySettingsDialog(QDialog):
         grid_layout.addWidget(QLabel("Bottom:"), 1, 0)
         self.bottom_combo = QComboBox()
         self.bottom_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
-        self.bottom_combo.setCurrentText(current_settings.get('bottom', DisplaySettingsDialog.default_settings['bottom']).value)
+        self.bottom_combo.setCurrentText(current_settings['bottom'].value)
         self.bottom_combo.currentIndexChanged.connect(self._on_setting_changed)
         grid_layout.addWidget(self.bottom_combo, 1, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 1, 2)
@@ -131,7 +162,7 @@ class DisplaySettingsDialog(QDialog):
         grid_layout.addWidget(QLabel("Left:"), 2, 0)
         self.left_combo = QComboBox()
         self.left_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
-        self.left_combo.setCurrentText(current_settings.get('left', DisplaySettingsDialog.default_settings['left']).value)
+        self.left_combo.setCurrentText(current_settings['left'].value)
         self.left_combo.currentIndexChanged.connect(self._on_setting_changed)
         grid_layout.addWidget(self.left_combo, 2, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 2, 2)
@@ -151,7 +182,7 @@ class DisplaySettingsDialog(QDialog):
         grid_layout.addWidget(QLabel("Right:"), 3, 0)
         self.right_combo = QComboBox()
         self.right_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
-        self.right_combo.setCurrentText(current_settings.get('right', DisplaySettingsDialog.default_settings['right']).value)
+        self.right_combo.setCurrentText(current_settings['right'].value)
         self.right_combo.currentIndexChanged.connect(self._on_setting_changed)
         grid_layout.addWidget(self.right_combo, 3, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 3, 2)
@@ -171,14 +202,13 @@ class DisplaySettingsDialog(QDialog):
         layout.addWidget(axes_group)
 
         # Colormap selection
-        colormap_group = QGroupBox("Colormap properties")
-        
+        colormap_group = QGroupBox("Colormap properties")        
         colormap_layout = QHBoxLayout()
 
         # Colorbar visible checkbox
         show_colorbar_layout = QHBoxLayout(alignment=Qt.AlignCenter)
         self.colorbar_visible_checkbox = QCheckBox("Show Colorbar")
-        self.colorbar_visible_checkbox.setChecked(current_settings.get('colorbar_visible', DisplaySettingsDialog.default_settings['colorbar_visible']))
+        self.colorbar_visible_checkbox.setChecked(current_settings['colorbar_visible'])
         self.colorbar_visible_checkbox.stateChanged.connect(self._on_setting_changed)
         show_colorbar_layout.addWidget(self.colorbar_visible_checkbox)
         colormap_layout.addLayout(show_colorbar_layout)
@@ -188,7 +218,7 @@ class DisplaySettingsDialog(QDialog):
         colorscheme_layout.addWidget(QLabel("Color scheme:"))
         self.colormap_combo = QComboBox()
         self.colormap_combo.addItems(DisplaySettingsDialog.colormap_options)
-        self.colormap_combo.setCurrentText(current_settings.get('colormap', DisplaySettingsDialog.default_settings['colormap']))
+        self.colormap_combo.setCurrentText(current_settings['colormap'])
         self.colormap_combo.currentIndexChanged.connect(self._on_setting_changed)
         colorscheme_layout.addWidget(self.colormap_combo)
         colormap_layout.addLayout(colorscheme_layout)
@@ -196,7 +226,7 @@ class DisplaySettingsDialog(QDialog):
         # Flip colormap checkbox
         flip_checkbox_layout = QHBoxLayout(alignment=Qt.AlignCenter)
         self.flip_colormap_checkbox = QCheckBox("Flip colormap")
-        self.flip_colormap_checkbox.setChecked(current_settings.get('flip_colormap', DisplaySettingsDialog.default_settings['flip_colormap']))
+        self.flip_colormap_checkbox.setChecked(current_settings['flip_colormap'])
         self.flip_colormap_checkbox.stateChanged.connect(self._on_setting_changed)
         flip_checkbox_layout.addWidget(self.flip_colormap_checkbox)
         colormap_layout.addLayout(flip_checkbox_layout)
@@ -204,11 +234,39 @@ class DisplaySettingsDialog(QDialog):
         colormap_group.setLayout(colormap_layout)
         layout.addWidget(colormap_group)
 
-        # File name in plot checkbox
-        self.file_name_in_plot_checkbox = QCheckBox("Show file name in plot")
-        self.file_name_in_plot_checkbox.setChecked(current_settings.get('file_name_in_plot', DisplaySettingsDialog.default_settings['file_name_in_plot']))
-        self.file_name_in_plot_checkbox.stateChanged.connect(self._on_setting_changed)
-        layout.addWidget(self.file_name_in_plot_checkbox)
+        depth_conversion_group = QGroupBox("Conversion to depth parameters")        
+        depth_conversion_layout = QHBoxLayout()
+
+        first_arrival_layout = QHBoxLayout(alignment=Qt.AlignCenter)
+        first_arrival_layout.addWidget(QLabel("First arrival: [samples]"))
+        self.ind_sample_time_first_arrival_spinbox = QSpinBox()
+        self.ind_sample_time_first_arrival_spinbox.setRange(0, 10000)
+        self.ind_sample_time_first_arrival_spinbox.setValue(current_settings['ind_sample_time_first_arrival'])
+        self.ind_sample_time_first_arrival_spinbox.valueChanged.connect(self._on_setting_changed)
+        first_arrival_layout.addWidget(self.ind_sample_time_first_arrival_spinbox)
+        depth_conversion_layout.addLayout(first_arrival_layout)
+
+        air_velocity_layout = QHBoxLayout(alignment=Qt.AlignCenter)
+        air_velocity_layout.addWidget(QLabel("Air velocity: [m/µs]"))
+        self.air_velocity_spinbox = QSpinBox()
+        self.air_velocity_spinbox.setRange(1, C_VACUUM_METERS_PER_MICROSECOND)
+        self.air_velocity_spinbox.setValue(convert_velocity_to_meters_per_microsecond(current_settings['air_velocity_m_per_s']))
+        self.air_velocity_spinbox.valueChanged.connect(self._on_setting_changed)
+        air_velocity_layout.addWidget(self.air_velocity_spinbox)
+        depth_conversion_layout.addLayout(air_velocity_layout)
+
+        ground_velocity_layout = QHBoxLayout(alignment=Qt.AlignCenter)
+        ground_velocity_layout.addWidget(QLabel("Ground velocity: [m/µs]"))
+        self.ground_velocity_spinbox = QSpinBox()
+        self.ground_velocity_spinbox.setRange(1, C_VACUUM_METERS_PER_MICROSECOND)
+        self.ground_velocity_spinbox.setValue(convert_velocity_to_meters_per_microsecond(current_settings['ground_velocity_m_per_s']))
+        self.ground_velocity_spinbox.valueChanged.connect(self._on_setting_changed)
+        ground_velocity_layout.addWidget(self.ground_velocity_spinbox)
+        depth_conversion_layout.addLayout(ground_velocity_layout)
+
+        depth_conversion_group.setLayout(depth_conversion_layout)
+        layout.addWidget(depth_conversion_group)
+
 
         # Dialog buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -219,7 +277,7 @@ class DisplaySettingsDialog(QDialog):
 
     def _on_setting_changed(self):
         """Called when any setting changes - update parent display immediately."""
-        new_settings = self.get_settings()
+        new_settings = self.get_settings_from_layout()
         old_colorbar = self._old_settings.get('colorbar_visible', True)
         new_colorbar = new_settings.get('colorbar_visible', True)
 
@@ -242,26 +300,33 @@ class DisplaySettingsDialog(QDialog):
         self._parent.canvas_render()
         super().reject()
 
-    def get_settings(self):
+    def get_settings_from_layout(self):
         """Return the selected settings as a dictionary."""
-        return {
-            'top': AxisType(self.top_combo.currentText()),
-            'bottom': AxisType(self.bottom_combo.currentText()),
-            'left': AxisType(self.left_combo.currentText()),
-            'right': AxisType(self.right_combo.currentText()),
-            'colormap': self.colormap_combo.currentText(),
-            'flip_colormap': self.flip_colormap_checkbox.isChecked(),
-            'colorbar_visible': self.colorbar_visible_checkbox.isChecked(),
+        air_velocity_m_per_s = self.air_velocity_spinbox.value()*1e6 # convert from meters per microsecond to meters per second
+        ground_velocity_m_per_s = self.ground_velocity_spinbox.value()*1e6 # convert from meters per microsecond to meters per second
+        ret = {
             'file_name_in_plot': self.file_name_in_plot_checkbox.isChecked(),
+            'top': AxisType(self.top_combo.currentText()),
             'top_major_tick': self.top_major_tick.value(),
             'top_minor_ticks': self.top_minor_ticks.value(),
+            'bottom': AxisType(self.bottom_combo.currentText()),
             'bottom_major_tick': self.bottom_major_tick.value(),
             'bottom_minor_ticks': self.bottom_minor_ticks.value(),
+            'left': AxisType(self.left_combo.currentText()),
             'left_major_tick': self.left_major_tick.value(),
             'left_minor_ticks': self.left_minor_ticks.value(),
+            'right': AxisType(self.right_combo.currentText()),
             'right_major_tick': self.right_major_tick.value(),
             'right_minor_ticks': self.right_minor_ticks.value(),
+            'colorbar_visible': self.colorbar_visible_checkbox.isChecked(),
+            'colormap': self.colormap_combo.currentText(),
+            'flip_colormap': self.flip_colormap_checkbox.isChecked(),
+            'ind_sample_time_first_arrival': self.ind_sample_time_first_arrival_spinbox.value(),
+            'air_velocity_m_per_s': min(air_velocity_m_per_s, C_VACUUM),
+            'ground_velocity_m_per_s': min(ground_velocity_m_per_s, C_VACUUM),
         }
+        assert sorted(list(ret.keys())) == sorted(list(DisplaySettingsDialog.default_settings.keys()))
+        return ret
 
 
 @auto_register
@@ -294,15 +359,20 @@ class SeismicSubWindow(UASSubWindow):
         self._colorbar: plt.Colorbar | None = None
         self._image: plt_image.AxesImage | None = None
         self._colorbar_indicator: Line2D | None = None
+        self._colorbar_background = None  # Cache for blitting
 
-        # Metadata fields
-        self._trace_coords: np.ndarray | None = None
-        self._trace_cumulative_distances: np.ndarray | None = None
-        self._sample_interval_seconds: float = 1.0
-        self._sample_min_seconds: float = 0.0
-        self._z_display_units: str = ""
-        self._z_display_value_factor: float = 1.0
-        self._is_depth: bool = False
+        # trace distances data in meters
+        self._trace_coords_meters: np.ndarray | None = None
+        self._trace_cumulative_distances_meters: np.ndarray | None = None
+
+        # time samples data in seconds
+        self._time_interval_seconds: float = 1.0
+        self._time_first_arrival_seconds: float = 0.0
+        self._time_samples_seconds: np.ndarray | None = None
+        self._time_display_units: str = "s"
+        self._time_display_value_factor: float = 1.0 # for display time in nano seconds, milliseconds, seconds
+        self._offset_meters: float = 0.0
+        self._depth_converted: np.ndarray | None = None
 
         # Zoom state
         self._zoom_active: bool = False
@@ -356,23 +426,42 @@ class SeismicSubWindow(UASSubWindow):
         # Connect resize event to update layout
         self._canvas.mpl_connect('resize_event', self._on_resize)
 
+        # Connect draw event to update background cache for blitting
+        self._canvas.mpl_connect('draw_event', self._on_draw_complete)
+
         # Register as listener for global settings changes
         GlobalSettings.add_listener(self._on_global_settings_changed)
 
 
     def _get_unit_label(self, axis_type: AxisType) -> str:
-        if axis_type in [AxisType.TIME, AxisType.DEPTH]:
-            return self._z_display_units
+        if axis_type == AxisType.TIME:
+            return self._time_display_units
+        if axis_type in [AxisType.DEPTH, AxisType.DISTANCE]:
+            return GlobalSettings.display_length_unit
         return ""
 
-    def _get_axis_geometry(self, axis_type: AxisType) -> tuple:
-        if axis_type in [AxisType.TIME, AxisType.DEPTH]:
-            return (-self._sample_min_seconds*self._z_display_value_factor, self._sample_interval_seconds*self._z_display_value_factor, self._data.shape[0])
-        if axis_type in [AxisType.DISTANCE]:
-            nx = self._data.shape[1]
-            dx = self._trace_cumulative_distances[-1] / (nx - 1)
-            return (0, dx*GlobalSettings.display_length_factor, nx)
-        return (0, 1, self._data.shape[1])
+    def _get_axis_geometry_4_display(self, axis_type: AxisType) -> tuple:
+        nz, nx = self._data.shape
+        if axis_type == AxisType.TIME:
+            dt = self._time_interval_seconds*self._time_display_value_factor
+            time_min = self._time_samples_seconds[0]*self._time_display_value_factor
+            return (time_min, dt, nz)
+        if axis_type == AxisType.DISTANCE: # distance between traces
+            dx = self._trace_cumulative_distances_meters[-1] / (nx - 1) * GlobalSettings.display_length_factor
+            distance_min = 0.0
+            return (distance_min, dx, nx)
+        if axis_type == AxisType.DEPTH: # time converted to depth
+            z_min = self._depth_converted[0] * GlobalSettings.display_length_factor
+            z_max = self._depth_converted[-1] * GlobalSettings.display_length_factor
+            dz = (z_max - z_min) / (nz - 1)
+            return (z_min, dz, nz)
+        if axis_type == AxisType.SAMPLE:
+            sample_min = 0.0
+            return (sample_min, 1, nz)
+        if axis_type == AxisType.TRACE:
+            trace_min = 0.0
+            return (trace_min, 1, nx)
+        return (0, 1, 0)
 
     def _show_error(self, title: str, message: str) -> None:
         """Show error message by rendering it on the matplotlib canvas.
@@ -655,11 +744,16 @@ class SeismicSubWindow(UASSubWindow):
 
 
     def _update_colorbar_indicator(self, amplitude: float|None) -> None:
-        """Update the horizontal indicator line on the colorbar."""
-        self.remove_colorbar_indicator()
-
+        """Update the horizontal indicator line on the colorbar using fast blitting."""
         if self._image is None or self._colorbar is None or amplitude is None:
+            # Clear indicator if no amplitude
+            if self._colorbar_indicator is not None:
+                self.remove_colorbar_indicator()
+                if self._colorbar_background is not None:
+                    self._canvas.restore_region(self._colorbar_background)
+                    self._canvas.blit(self._colorbar.ax.bbox)
             return
+
         # If amplitude is None, use the middle of the colorbar
         if abs(self._amplitude_min - self._amplitude_max) < 1e-9:
             norm_value = 0.5
@@ -669,11 +763,28 @@ class SeismicSubWindow(UASSubWindow):
         cmap = self._image.get_cmap()
         rgba = cmap(norm_value)
         inv_color = (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
-        self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
-        self._canvas.draw_idle()
+
+        # Use blitting for fast updates
+        if self._colorbar_background is not None:
+            # Restore clean background
+            self._canvas.restore_region(self._colorbar_background)
+
+            # Draw new indicator line
+            self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
+
+            # Draw just the indicator
+            self._colorbar.ax.draw_artist(self._colorbar_indicator)
+
+            # Blit only the colorbar area (fast!)
+            self._canvas.blit(self._colorbar.ax.bbox)
+        else:
+            # Fallback: no background cached, use full redraw
+            self.remove_colorbar_indicator()
+            self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
+            self._canvas.draw_idle()
 
 
-    def get_hover_info(self, x: float, y: float) -> dict[str, Any] | None:
+    def get_hover_info(self, x: float|None, z: float|None) -> dict[str, Any] | None:
         """
         Calculate hover information for given pixel coordinates.
 
@@ -687,33 +798,36 @@ class SeismicSubWindow(UASSubWindow):
         if self._data is None:
             return None
 
-        ix, iy = int(round(x)), int(round(y))
-
-        # Check bounds
-        if not (0 <= iy < self._data.shape[0] and 0 <= ix < self._data.shape[1]):
-            return None
-        z_value = (iy * self._sample_interval_seconds - self._sample_min_seconds) * self._z_display_value_factor
-        z_units = self._z_display_units
-        if self._trace_cumulative_distances is not None:
-            if ix == len(self._trace_cumulative_distances) - 1:
-                distance = self._trace_cumulative_distances[-1]
-            else:
-                dx = x - ix
-                distance = self._trace_cumulative_distances[ix] * (1-dx) + self._trace_cumulative_distances[ix+1] * dx
-            distance *= GlobalSettings.display_length_factor
+        if x is None:
+            ix = -1
         else:
-            distance = None
+            ix = max(0, min(int(x+0.5), self._data.shape[1] - 1))
+        if z is None:
+            iz = -1
+        else:
+            iz = max(0, min(int(z+0.5), self._data.shape[0] - 1))
 
-        hover_info = {
-            'trace_number': ix,
-            'sample_number': iy,
-            'z_value': z_value,
-            'z_units': z_units,
-            'is_depth': self._is_depth,  # True = depth, False = time
-            'amplitude': self._data[iy, ix],
-            'distance': distance,
-        }
+        amplitude = self._data[iz, ix] if ix >= 0 and iz >= 0 else None
 
+        time_value = simple_interpolation(self._time_samples_seconds, z) * self._time_display_value_factor
+        distance = simple_interpolation(self._trace_cumulative_distances_meters, x) * GlobalSettings.display_length_factor
+        depth_value = simple_interpolation(self._depth_converted, z) * GlobalSettings.display_length_factor
+
+        hover_info = {}
+
+        if time_value is not None:
+            hover_info['time_units'] = self._time_display_units
+            hover_info['time_value'] = time_value
+        if depth_value is not None:
+            hover_info['depth_value'] = depth_value
+        if distance is not None:
+            hover_info['distance'] = distance
+        if amplitude is not None:
+            hover_info['amplitude'] = amplitude
+        if iz >= 0:
+            hover_info['sample_number'] = iz
+        if ix >= 0:
+            hover_info['trace_number'] = ix
         return hover_info
 
 
@@ -839,12 +953,13 @@ class SeismicSubWindow(UASSubWindow):
             self._show_error("Error", f"Failed to load file: {filename}\n{error_message}")
             self.remove_colorbar_indicator()
             self.remove_colorbar()
-            self._trace_coords = None
-            self._trace_cumulative_distances = None
-            self._distance_unit = "trace"
-            self._sample_interval_seconds = 1.0
-            self._sample_min_seconds = 0.0
-            self._is_depth = False
+            self._trace_coords_meters = None
+            self._trace_cumulative_distances_meters = None
+            self._trace_time_delays_seconds = None
+            self._time_interval_seconds = 1.0
+            self._time_first_arrival_seconds = 0.0
+            self._time_samples_seconds = None
+            self._depth_converted = None
             self._amplitude_min = 0.0
             self._amplitude_max = 0.0
             self._image = None
@@ -852,33 +967,41 @@ class SeismicSubWindow(UASSubWindow):
             return False
 
         self._filename = filename
-        self._amplitude_min = np.min(self._data)
-        self._amplitude_max = np.max(self._data)
-        z_range_seconds = self._data.shape[0] * self._sample_interval_seconds
-        if self._sample_min_seconds < 0 or self._sample_min_seconds >= z_range_seconds:
+        self._amplitude_min = float(np.min(self._data))
+        self._amplitude_max = float(np.max(self._data))
+        # Calculate time range in seconds
+        nt, nx = self._data.shape
+        self._time_first_arrival_seconds = np.median(self._trace_time_delays_seconds)
+        time_range_seconds = (nt - 1) * self._time_interval_seconds
+        if self._time_first_arrival_seconds < self._time_interval_seconds or self._time_first_arrival_seconds >= time_range_seconds - self._time_interval_seconds:
             # default to 10% of the data range
-            self._sample_min_seconds = self._data.shape[0] * self._sample_interval_seconds * 0.1
-        self._sample_min_seconds = round(self._sample_min_seconds / self._sample_interval_seconds) * self._sample_interval_seconds
-        if z_range_seconds < 0.01:
-            # to nano seconds
-            self._z_display_units = "ns"
-            self._z_display_value_factor = 1_000_000_000.0
-        elif z_range_seconds < 10.0:
-            # to milliseconds
-            self._z_display_units = "ms"
-            self._z_display_value_factor = 1000.0
+            self._time_first_arrival_seconds = time_range_seconds * 0.1
+        self._time_samples_seconds = np.arange(nt) * self._time_interval_seconds - self._time_first_arrival_seconds
+        ind_sample_time_first_arrival = int(self._time_first_arrival_seconds / self._time_interval_seconds)
+        while ind_sample_time_first_arrival < self._time_samples_seconds.shape[0] and self._time_samples_seconds[ind_sample_time_first_arrival] < 0:
+            ind_sample_time_first_arrival += 1
+        self._display_settings['ind_sample_time_first_arrival'] = ind_sample_time_first_arrival
+        if time_range_seconds < 0.01:
+            # display time in nano seconds
+            self._time_display_units = "ns"
+            self._time_display_value_factor = 1_000_000_000.0
+        elif time_range_seconds < 10.0:
+            # display time in milliseconds
+            self._time_display_units = "ms"
+            self._time_display_value_factor = 1000.0
         else:
-            # keep in seconds
-            self._z_display_units = "s"
-            self._z_display_value_factor = 1.0
+            # display time in seconds
+            self._time_display_units = "s"
+            self._time_display_value_factor = 1.0
 
         # Calculate cumulative distances along the survey line
         # Distance from trace i-1 to trace i for each trace
-        assert self._trace_coords is not None
-        assert self._trace_coords.shape[1] == 2
-        trace_distances = np.sqrt(np.sum(np.diff(self._trace_coords, axis=0)**2, axis=1))
+        trace_distances_meters = np.sqrt(np.sum(np.diff(self._trace_coords_meters, axis=0)**2, axis=1))
         # Cumulative sum with 0.0 prepended for first trace
-        self._trace_cumulative_distances = np.cumsum(np.concatenate([[0.0], trace_distances]))
+        self._trace_cumulative_distances_meters = np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
+        assert len(self._trace_cumulative_distances_meters) == len(self._trace_coords_meters)
+
+        self.calculate_depth_converted()
 
         self.canvas_render()
         return ret
@@ -892,13 +1015,11 @@ class SeismicSubWindow(UASSubWindow):
                     return False, "No data found in SEGY file"
                 # Extract metadata from SEGY file
                 # Sample interval from binary header (bytes 3217-3218, in microseconds per SEG-Y standard)
-                dt_us = f.bin[segyio.BinField.Interval]
+                dt_us = float(f.bin[segyio.BinField.Interval])
                 if dt_us <= 0:
                     return False, "Sample interval is not set in SEGY file"
-                self._sample_interval_seconds = dt_us / 1_000_000.0  # Convert microseconds to seconds
+                self._time_interval_seconds = dt_us / 1_000_000.0  # Convert microseconds to seconds
 
-                # Check if depth or time (assume time by default for SEGY)
-                self._is_depth = False
 
                 # Try to extract trace coordinates from trace headers
                 num_traces = len(f.trace)
@@ -917,8 +1038,9 @@ class SeismicSubWindow(UASSubWindow):
                 # Read measurement system from binary header (bytes 3255-3256)
                 measurement_system = f.bin[segyio.BinField.MeasurementSystem]
                 file_unit_system = segy_measurement_system_map.get(measurement_system, UnitSystem.MKS)
-                convert_2_mks = UnitSystem.convert_length_factor(file_unit_system, UnitSystem.MKS)
+                factor_length_2_mks = UnitSystem.convert_length_factor(file_unit_system, UnitSystem.MKS)
                 time_delays_seconds = np.full(num_traces, fill_value=np.nan)
+                trace_offset_meters = np.full(num_traces, fill_value=np.nan)
                 count_valid_coords = 0
                 for i in range(num_traces):
                     trace_header = f.header[i]
@@ -942,23 +1064,21 @@ class SeismicSubWindow(UASSubWindow):
                     coord_units = trace_header[segyio.TraceField.CoordinateUnits]
                     if coord_units in segy_coord_unit_map:
                         if segy_coord_unit_map[coord_units] == "length":
-                            x *= convert_2_mks
-                            y *= convert_2_mks
+                            x *= factor_length_2_mks
+                            y *= factor_length_2_mks
                             pass
                         pass
                     coords[i] = [x, y]
+                    trace_offset_meters[i] = trace_header[segyio.TraceField.Offset] * factor_length_2_mks
 
                 if not count_valid_coords:
                     return False, "No trace coordinates found in SEGY file"
-                # interpolate nan values in coords
-                arrange_indices = np.arange(num_traces)
-                is_nan_coords = np.isnan(coords[:, 0]) | np.isnan(coords[:, 1])
-                coords[is_nan_coords] = np.interp(arrange_indices[is_nan_coords], arrange_indices[~is_nan_coords], coords[~is_nan_coords])
-                self._trace_coords = coords
-                is_nan_time_delays = np.isnan(time_delays_seconds)
-                time_delays_seconds[is_nan_time_delays] = np.interp(arrange_indices[is_nan_time_delays], arrange_indices[~is_nan_time_delays], time_delays_seconds[~is_nan_time_delays])
+                interpolate_inplace_nan_values(coords)
+                interpolate_inplace_nan_values(time_delays_seconds)
+                interpolate_inplace_nan_values(trace_offset_meters)
                 self._trace_time_delays_seconds = time_delays_seconds
-                self._sample_min_seconds = np.median(time_delays_seconds)
+                self._offset_meters = np.median(trace_offset_meters)
+                self._trace_coords_meters = coords
         except Exception as e:
             return False, f"Error loading SEGY file: {e}"
 
@@ -970,35 +1090,31 @@ class SeismicSubWindow(UASSubWindow):
             file_base, _ = os.path.splitext(filename)
             data, info = readMALA(file_base)
             self._data = np.array(data)
+            nt, nx = self._data.shape[0], self._data.shape[1]
 
             # Extract metadata from MALA header
             # Calculate sample interval (dt) from TIMEWINDOW and SAMPLES
             # TIMEWINDOW is in nanoseconds
             timewindow_ns = float(info.get('TIMEWINDOW', 0))
-            samples = self._data.shape[0]
-            if timewindow_ns > 0 and samples > 1:
-                dt_ns = timewindow_ns / (samples - 1)
-                self._sample_interval_seconds = dt_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
+            if timewindow_ns > 0 and nt > 1:
+                dt_ns = timewindow_ns / (nt - 1)
+                self._time_interval_seconds = dt_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
             else:
-                self._sample_interval_seconds = 1.0
-
-            # MALA is typically time-based (GPR data)
-            self._is_depth = False
+                self._time_interval_seconds = 1.0
 
             # Extract signal position (time zero offset) from MALA header
             # SIGNAL POSITION is in nanoseconds
             signal_position_ns = float(info.get('SIGNAL POSITION', 0))
-            self._sample_min_seconds = signal_position_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
+            self._trace_time_delays_seconds = np.full(nx, signal_position_ns / 1_000_000_000.0)  # Convert nanoseconds to seconds
 
             # Distance interval from MALA header
             distance_interval = float(info.get('DISTANCE INTERVAL', 0))
             if distance_interval <= 0:
                 return False, "Distance interval is not set in MALA file"
-            num_traces = self._data.shape[1]
             # Create linear coordinates based on distance interval
-            x_coords = np.arange(num_traces) * distance_interval
-            self._trace_coords = np.column_stack([x_coords, np.zeros(num_traces)])
-            self._trace_time_delays_seconds = np.full(num_traces, fill_value=self._sample_min_seconds)
+            x_coords = np.arange(nx) * distance_interval
+            self._trace_coords_meters = np.column_stack([x_coords, np.zeros(nx)])
+            self._offset_meters = info.get('OFFSET', 0)
         except Exception as e:
             return False, f"Error loading MALA file: {e}"
 
@@ -1032,12 +1148,28 @@ class SeismicSubWindow(UASSubWindow):
 
         # Force canvas draw to initialize colorbar axis transforms
         self._canvas.draw()
+
+        # Save background for fast blitting of colorbar indicator
+        if self._colorbar is not None:
+            self._colorbar_background = self._canvas.copy_from_bbox(self._colorbar.ax.bbox)
+
         self._canvas.draw_idle()
 
+
+    def _on_draw_complete(self, event) -> None:
+        """Cache colorbar background after draw completes for fast blitting."""
+        if self._colorbar is not None and self._data is not None:
+            try:
+                self._colorbar_background = self._canvas.copy_from_bbox(self._colorbar.ax.bbox)
+            except:
+                # If copy fails, just skip caching
+                self._colorbar_background = None
 
     def _on_resize(self, event) -> None:
         """Handle canvas resize event to maintain fixed pixel margins."""
         if self._data is not None:
+            # Invalidate cached background since layout changes
+            self._colorbar_background = None
             self._adjust_layout_with_fixed_margins()
 
 
@@ -1150,9 +1282,15 @@ class SeismicSubWindow(UASSubWindow):
         self.remove_colorbar_indicator()
 
         # Only remove if the colorbar's axes is still in the figure
-        if self._colorbar.ax.figure is self._fig and self._colorbar.ax in self._fig.axes:
-            self._colorbar.remove()
+        if self._colorbar.ax is not None and self._colorbar.ax.figure is self._fig and self._colorbar.ax in self._fig.axes:
+            try:
+                self._colorbar.remove()
+            except (AttributeError, ValueError):
+                # Colorbar might already be in an inconsistent state, just clear the reference
+                pass
+
         self._colorbar = None
+        self._colorbar_background = None  # Clear cached background
 
 
     def remove_colorbar_indicator(self) -> None:
@@ -1192,10 +1330,13 @@ class SeismicSubWindow(UASSubWindow):
         """Apply the display settings to the axes."""
         if self._data is None:
             return
-
-        colormap = self._display_settings.get('colormap', 'seismic')
-        flip_colormap = self._display_settings.get('flip_colormap', False)
-        file_name_in_plot = self._display_settings.get('file_name_in_plot', True)
+        # recalculate time samples seconds
+        ind_sample_time_first_arrival = self._display_settings['ind_sample_time_first_arrival']
+        self._time_samples_seconds = np.arange(-ind_sample_time_first_arrival,self._data.shape[0]-ind_sample_time_first_arrival) * self._time_interval_seconds
+        self.calculate_depth_converted()
+        colormap = self._display_settings['colormap']
+        flip_colormap = self._display_settings['flip_colormap']
+        file_name_in_plot = self._display_settings['file_name_in_plot']
         # Add '_r' suffix to flip the colormap
         if flip_colormap:
             colormap = colormap + '_r'
@@ -1204,10 +1345,12 @@ class SeismicSubWindow(UASSubWindow):
             self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude [mV]")
             colorbar_ticks = list(self._colorbar.get_ticks())
             # assuming the colorbar ticks are already sorted, add min and max if not already present
-            while colorbar_ticks and colorbar_ticks[0] <= self._amplitude_min:
-                colorbar_ticks.pop(0)
-            while colorbar_ticks and colorbar_ticks[-1] >= self._amplitude_max:
-                colorbar_ticks.pop(-1)
+            delta_amplitude = (self._amplitude_max - self._amplitude_min) * 0.05
+            # remove ticks that are too close to the min and max
+            while colorbar_ticks and colorbar_ticks[0] <= self._amplitude_min + delta_amplitude:
+                colorbar_ticks = colorbar_ticks[1:]
+            while colorbar_ticks and colorbar_ticks[-1] >= self._amplitude_max - delta_amplitude:
+                colorbar_ticks = colorbar_ticks[:-1]
             colorbar_ticks = [self._amplitude_min] + colorbar_ticks + [self._amplitude_max]
             self._colorbar.set_ticks(colorbar_ticks)
 
@@ -1215,10 +1358,10 @@ class SeismicSubWindow(UASSubWindow):
             self._axes.set_title(os.path.basename(self._filename))
 
         # Get current settings
-        top = self._display_settings.get('top', AxisType.NONE)
-        bottom = self._display_settings.get('bottom', AxisType.DISTANCE)
-        left = self._display_settings.get('left', AxisType.SAMPLE)
-        right = self._display_settings.get('right', AxisType.NONE)
+        top = self._display_settings['top']
+        bottom = self._display_settings['bottom']
+        left = self._display_settings['left']
+        right = self._display_settings['right']
 
         # remove top and bottom labels
         self._axes.set_xlabel(None)
@@ -1233,37 +1376,21 @@ class SeismicSubWindow(UASSubWindow):
             ax2 = self._axes.secondary_xaxis('top')
             ax2.set_visible(True)
             ax2.tick_params(axis='x', top=True, labeltop=True)
-            self._apply_tick_settings(
-                ax2.xaxis,
-                top,
-                self._display_settings.get('top_major_tick', 0.0),
-                self._display_settings.get('top_minor_ticks', 0)
-            )
+            self._apply_tick_settings(ax2.xaxis, top, self._display_settings['top_major_tick'], self._display_settings['top_minor_ticks'])
 
         # Apply bottom axis
         if bottom == AxisType.NONE:
             self._axes.xaxis.set_tick_params(bottom=False, labelbottom=False)
         else:
             self._axes.xaxis.set_tick_params(bottom=True, labelbottom=True)
-            self._apply_tick_settings(
-                self._axes.xaxis,
-                bottom,
-                self._display_settings.get('bottom_major_tick', 0.0),
-                self._display_settings.get('bottom_minor_ticks', 0)
-            )
+            self._apply_tick_settings(self._axes.xaxis, bottom, self._display_settings['bottom_major_tick'], self._display_settings['bottom_minor_ticks'])
 
         # Apply left axis
         if left == AxisType.NONE:
             self._axes.yaxis.set_tick_params(left=False, labelleft=False)
         else:
             self._axes.yaxis.set_tick_params(left=True, labelleft=True)
-            self._apply_tick_settings(
-                self._axes.yaxis,
-                left,
-                self._display_settings.get('left_major_tick', 0.0),
-                self._display_settings.get('left_minor_ticks', 0)
-            )
-            # Apply tick settings for left axis
+            self._apply_tick_settings(self._axes.yaxis, left, self._display_settings['left_major_tick'], self._display_settings['left_minor_ticks'])
 
         # Apply right axis
         if right == AxisType.NONE:
@@ -1273,17 +1400,12 @@ class SeismicSubWindow(UASSubWindow):
             ax2 = self._axes.secondary_yaxis('right')
             ax2.set_visible(True)
             ax2.tick_params(axis='y', right=True, labelright=True)
-            self._apply_tick_settings(
-                ax2.yaxis,
-                right,
-                self._display_settings.get('right_major_tick', 0.0),
-                self._display_settings.get('right_minor_ticks', 0)
-            )
+            self._apply_tick_settings(ax2.yaxis, right, self._display_settings['right_major_tick'], self._display_settings['right_minor_ticks'])
 
 
     def is_colorbar_axes_visible(self) -> bool:
-        colorbar_visible = self._display_settings.get('colorbar_visible', True) # must check with default value True
-        if not colorbar_visible:
+        colorbar_visible = self._display_settings['colorbar_visible'] # must check with default value True
+        if not colorbar_visible or self._data is None or np.isnan(self._amplitude_min) or np.isnan(self._amplitude_max):
             self.remove_colorbar_axes()
             return False
             
@@ -1315,35 +1437,35 @@ class SeismicSubWindow(UASSubWindow):
             label = f"{label} [{axis_unit_label}]"
         axis.set_label_text(label)
 
-        def n_ticks(view_val, distance) -> int:
-            # Calculate tick multiplier for exact multiples of distance
-            # Uses int() truncation to only include ticks at 0, ±distance, ±2*distance, etc.
-            # Example: view_val=-10, distance=25 -> returns 0 (no tick at -25 since -10 > -25)
-            #          view_val=-30, distance=25 -> returns -1 (includes tick at -25)
-            return int(abs(view_val) / distance) * int(np.sign(view_val))
-
         # For distance axis, convert pixel indices to distance values in tick labels
         if axis_type == AxisType.DISTANCE:
-            def format_distance(x, pos):
-                # x is pixel index, convert to distance
-                ix = int(x+0.5)
-                ix = max(0, min(ix, len(self._trace_cumulative_distances) - 1))
-                distance = self._trace_cumulative_distances[ix] * GlobalSettings.display_length_factor
-                return f'{distance:.3g}'
-            axis.set_major_formatter(FuncFormatter(format_distance))
+            if self._trace_cumulative_distances_meters is not None:
+                def format_distance(x, pos):
+                    distance = simple_interpolation(self._trace_cumulative_distances_meters, x) * GlobalSettings.display_length_factor
+                    return f'{distance:.3g}'
+                axis.set_major_formatter(FuncFormatter(format_distance))
+        elif axis_type == AxisType.DEPTH:
+            if self._depth_converted is not None:
+                def format_depth(z, pos):
+                    depth = simple_interpolation(self._depth_converted, z) * GlobalSettings.display_length_factor
+                    return f'{depth:.3g}'
+                axis.set_major_formatter(FuncFormatter(format_depth))
 
-        axis_min, axis_step, axis_num_samples = self._get_axis_geometry(axis_type)
+        axis_min, axis_step, axis_num_samples = self._get_axis_geometry_4_display(axis_type)
+
         minor_ticks_per_major = min(minor_ticks_per_major, axis_num_samples)
         axis_max = axis_min + axis_step * (axis_num_samples - 1)
-        if major_tick_distance <= axis_step:
-            major_tick_distance = axis_step
+        max_major_tick_distance = max(axis_step, axis_step*(axis_num_samples-1))
+        min_major_tick_distance = max(axis_step, 0.001*max_major_tick_distance)
+        if major_tick_distance <= min_major_tick_distance:
+            major_tick_distance = min_major_tick_distance
             minor_ticks_per_major = 0
-        if major_tick_distance >= axis_step*(axis_num_samples-1):
-            major_tick_distance = axis_step*(axis_num_samples-1)
+        if major_tick_distance >= max_major_tick_distance:
+            major_tick_distance = max_major_tick_distance
             minor_ticks_per_major = max(min(10,axis_num_samples), minor_ticks_per_major)
         # Calculate tick positions in display units
-        n_min = n_ticks(axis_min, major_tick_distance)
-        n_max = n_ticks(axis_max, major_tick_distance)
+        n_min = int(np.floor(axis_min / major_tick_distance))
+        n_max = int(np.floor(axis_max / major_tick_distance))
         if n_min >= n_max:
             # Use automatic tick placement with custom formatter for distance axis
             axis.set_major_locator(plt.AutoLocator())
@@ -1354,7 +1476,6 @@ class SeismicSubWindow(UASSubWindow):
 
         # Convert display unit positions to data coordinates (pixel indices)
         major_tick_positions = (major_tick_values - axis_min) / axis_step
-
         # Set ticks at data coordinate positions with display unit labels
         axis.set_ticks(major_tick_positions)
         axis.set_ticklabels([f'{val:.3g}' for val in major_tick_values])
@@ -1365,14 +1486,32 @@ class SeismicSubWindow(UASSubWindow):
 
         # Calculate minor tick positions
         minor_tick_distance = major_tick_distance / minor_ticks_per_major
-        n_min_minor = n_ticks(axis_min, minor_tick_distance)
-        n_max_minor = n_ticks(axis_max, minor_tick_distance)
+        n_min_minor = int(np.floor(axis_min / minor_tick_distance))
+        n_max_minor = int(np.floor(axis_max / minor_tick_distance))
         minor_tick_values = [i * minor_tick_distance for i in range(n_min_minor, n_max_minor + 1)
                             if i % minor_ticks_per_major != 0]
 
         # Convert to data coordinates
         minor_tick_positions = [(val - axis_min) / axis_step for val in minor_tick_values]
         axis.set_ticks(minor_tick_positions, minor=True)
+
+
+    def calculate_depth_converted(self) -> None:
+        """Calculate the depth converted data."""
+        if self._time_samples_seconds is None:
+            return
+        air_velocity_m_per_s = min(self._display_settings['air_velocity_m_per_s'], C_VACUUM)
+        ground_velocity_m_per_s = min(self._display_settings['ground_velocity_m_per_s'], C_VACUUM)
+        self._depth_converted = np.empty_like(self._time_samples_seconds)
+        # calculate negative depth from negative one-way travel time
+        ind_sample_time_first_arrival = self._display_settings['ind_sample_time_first_arrival']
+        self._depth_converted[:ind_sample_time_first_arrival] = self._time_samples_seconds[:ind_sample_time_first_arrival]*air_velocity_m_per_s
+        # calculate positive depth from positive one-way travel time
+        offset_ground_time = self._offset_meters / ground_velocity_m_per_s
+        one_way_vertical_time = 0.5*(self._time_samples_seconds[ind_sample_time_first_arrival:] + offset_ground_time)
+        L = one_way_vertical_time * ground_velocity_m_per_s
+        self._depth_converted[ind_sample_time_first_arrival:] = np.sqrt(L**2 - (0.5*self._offset_meters)**2)
+
 
 
     def _save_segy(self) -> None:
@@ -1503,3 +1642,32 @@ class SeismicSubWindow(UASSubWindow):
         # Show menu at cursor
         menu.exec(self.mapToGlobal(self.mapFromGlobal(self.cursor().pos())))
 
+
+
+def simple_interpolation(vec: np.ndarray|None, x: float|None) -> float|None:
+    if vec is None or vec.size == 0 or x is None:
+        return None
+    if x <= 0:
+        return vec[0]
+    if x >= vec.size - 1:
+        return vec[-1]
+    ix = int(x)
+    dx = x - ix
+    return vec[ix] * (1-dx) + vec[ix+1] * dx
+
+
+def interpolate_inplace_nan_values(vec: np.ndarray) -> None:
+    assert vec.ndim == 1 or vec.ndim == 2
+    is_nan = np.isnan(vec)
+    if vec.ndim == 2:
+        is_nan = is_nan.any(axis=1)
+    assert is_nan.shape == (vec.shape[0],)
+    arrange_indices = np.arange(vec.shape[0])
+    nan_indices = arrange_indices[is_nan]
+    non_nan_indices = arrange_indices[~is_nan]
+    vec_non_nan = vec[~is_nan]
+    if vec.ndim == 1:
+        vec[nan_indices] = np.interp(nan_indices, non_nan_indices, vec_non_nan)
+    else:
+        for col in range(vec.shape[1]):
+            vec[nan_indices, col] = np.interp(nan_indices, non_nan_indices, vec_non_nan[:, col])
