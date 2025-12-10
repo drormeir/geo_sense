@@ -237,30 +237,25 @@ class UASApplication:
         self._app.setApplicationName(self._app_name)
 
         session = SessionManager.get_instance()
-
+        create_default_window = True
         if load_session:
             if session_file:
                 try:
                     session.load(session_file)
+                    create_default_window = False
                 except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
                     print(f"Failed to load session: {e}")
-                    if default_main_window_type:
-                        self._create_default_window(default_main_window_type)
             else:
                 recent = session.get_recent_sessions(1)
                 if recent:
                     try:
                         session.load(recent[0])
+                        create_default_window = False
                     except (json.JSONDecodeError, KeyError) as e:
                         print(f"Failed to load recent session: {e}")
-                        if default_main_window_type:
-                            self._create_default_window(default_main_window_type)
-                elif default_main_window_type:
-                    self._create_default_window(default_main_window_type)
-        else:
-            # Not loading session: create default window
-            if default_main_window_type:
-                self._create_default_window(default_main_window_type)
+
+        if create_default_window:
+            self._create_default_window(type_name=default_main_window_type)
 
         # Disable auto-save if save_session is False
         if not save_session:
@@ -271,7 +266,10 @@ class UASApplication:
 
         return self._app.exec()
 
-    def _create_default_window(self, type_name: str) -> None:
+
+    def _create_default_window(self, type_name: str|None = None) -> None:
+        if not type_name:
+            return
         """Create a default main window using factory registry."""
         session = SessionManager.get_instance()
         registry = FactoryRegistry.get_instance()
