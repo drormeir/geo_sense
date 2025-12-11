@@ -1435,19 +1435,16 @@ class SeismicSubWindow(UASSubWindow):
             label = f"{label} [{axis_unit_label}]"
         axis.set_label_text(label)
 
-        # For distance axis, convert pixel indices to distance values in tick labels
-        if axis_type == AxisType.DISTANCE:
-            if self._trace_cumulative_distances_meters is not None:
-                def format_distance(x, pos):
-                    distance = simple_interpolation(self._trace_cumulative_distances_meters, x) * GlobalSettings.display_length_factor
-                    return format_value(distance, 3)
-                axis.set_major_formatter(FuncFormatter(format_distance))
-        elif axis_type == AxisType.DEPTH:
-            if self._depth_converted is not None:
-                def format_depth(z, pos):
-                    depth = simple_interpolation(self._depth_converted, z) * GlobalSettings.display_length_factor
-                    return format_value(depth, 3)
-                axis.set_major_formatter(FuncFormatter(format_depth))
+        if axis_type == AxisType.DEPTH:
+            if self._depth_converted is None:
+                return
+            axis_vector_values = self._depth_converted * GlobalSettings.display_length_factor
+        elif axis_type == AxisType.DISTANCE:
+            if self._trace_cumulative_distances_meters is None:
+                return
+            axis_vector_values = self._trace_cumulative_distances_meters * GlobalSettings.display_length_factor
+        else:
+            axis_vector_values = None
 
         axis_min, axis_step, axis_num_samples = self._get_axis_geometry_4_display(axis_type)
 
@@ -1462,8 +1459,10 @@ class SeismicSubWindow(UASSubWindow):
             major_tick_distance = max_major_tick_distance
             minor_ticks_per_major = max(min(10,axis_num_samples), minor_ticks_per_major)
         # Calculate tick positions in display units
-        n_min = int(np.floor(axis_min / major_tick_distance))
-        n_max = int(np.floor(axis_max / major_tick_distance))
+        sign_axis_min = int(np.sign(axis_min))
+        sign_axis_max = int(np.sign(axis_max))
+        n_min = int(abs(axis_min) / major_tick_distance) * sign_axis_min
+        n_max = int(abs(axis_max) / major_tick_distance) * sign_axis_max
         if n_min >= n_max:
             # Use automatic tick placement with custom formatter for distance axis
             axis.set_major_locator(plt.AutoLocator())
@@ -1471,9 +1470,10 @@ class SeismicSubWindow(UASSubWindow):
             return
 
         major_tick_values = np.arange(n_min, n_max + 1) * major_tick_distance
-
-        # Convert display unit positions to data coordinates (pixel indices)
-        major_tick_positions = (major_tick_values - axis_min) / axis_step
+        if axis_vector_values is not None:
+            major_tick_positions = np.interp(major_tick_values, axis_vector_values, np.arange(len(axis_vector_values)))
+        else:
+            major_tick_positions = (major_tick_values - axis_min) / axis_step
         # Set ticks at data coordinate positions with display unit labels
         axis.set_ticks(major_tick_positions)
         axis.set_ticklabels([format_value(val, 3) for val in major_tick_values])
@@ -1484,8 +1484,8 @@ class SeismicSubWindow(UASSubWindow):
 
         # Calculate minor tick positions
         minor_tick_distance = major_tick_distance / minor_ticks_per_major
-        n_min_minor = int(np.floor(axis_min / minor_tick_distance))
-        n_max_minor = int(np.floor(axis_max / minor_tick_distance))
+        n_min_minor = int(abs(axis_min) / minor_tick_distance) * sign_axis_min
+        n_max_minor = int(abs(axis_max) / minor_tick_distance) * sign_axis_max
         minor_tick_values = [i * minor_tick_distance for i in range(n_min_minor, n_max_minor + 1)
                             if i % minor_ticks_per_major != 0]
 
@@ -1495,21 +1495,42 @@ class SeismicSubWindow(UASSubWindow):
 
 
     def calculate_depth_converted(self) -> None:
-        """Calculate the depth converted data."""
+        """
+        Calculate depth for bistatic GPR using geometric correction.
+
+        For GPR with fixed Tx-Rx antenna separation (offset), the signal travels
+        diagonally from transmitter to reflector and back to receiver. The geometry
+        forms a triangle where:
+        - Slant distance: L = sqrt(d² + (offset/2)²)
+        - Two-way time: t = 2L/v
+        - Solving for depth: d = sqrt((v*t/2)² - (offset/2)²)
+        """
         if self._time_samples_seconds is None:
             return
         air_velocity_m_per_s = min(self._display_settings['air_velocity_m_per_s'], C_VACUUM)
         ground_velocity_m_per_s = min(self._display_settings['ground_velocity_m_per_s'], C_VACUUM)
-        self._depth_converted = np.empty_like(self._time_samples_seconds)
-        # calculate negative depth from negative one-way travel time
+        n_time_samples = len(self._time_samples_seconds)
+        critical_time = self._offset_meters / ground_velocity_m_per_s
+        half_offset = 0.5 * self._offset_meters
         ind_sample_time_first_arrival = self._display_settings['ind_sample_time_first_arrival']
-        self._depth_converted[:ind_sample_time_first_arrival] = self._time_samples_seconds[:ind_sample_time_first_arrival]*air_velocity_m_per_s
-        # calculate positive depth from positive one-way travel time
-        offset_ground_time = self._offset_meters / ground_velocity_m_per_s
-        one_way_vertical_time = 0.5*(self._time_samples_seconds[ind_sample_time_first_arrival:] + offset_ground_time)
-        L = one_way_vertical_time * ground_velocity_m_per_s
-        self._depth_converted[ind_sample_time_first_arrival:] = np.sqrt(L**2 - (0.5*self._offset_meters)**2)
+        self._depth_converted = np.empty_like(self._time_samples_seconds)
+        ind_sample_critical_time = ind_sample_time_first_arrival
+        while ind_sample_critical_time < n_time_samples and self._time_samples_seconds[ind_sample_critical_time] < critical_time:
+            ind_sample_critical_time += 1
+        # Above surface (negative time): antenna height above ground
+        # Uses air velocity for propagation before first arrival
+        self._depth_converted[:ind_sample_time_first_arrival] = \
+            self._time_samples_seconds[:ind_sample_time_first_arrival] * air_velocity_m_per_s
 
+        # Below surface: geometric correction for bistatic antenna configuration
+        # Signal travels diagonally from Tx to reflector to Rx
+        extra_time = (ind_sample_critical_time - ind_sample_time_first_arrival) * self._time_interval_seconds
+        two_way_time = self._time_samples_seconds[ind_sample_time_first_arrival:] + extra_time
+        slant_distance = (two_way_time * ground_velocity_m_per_s) / 2
+
+        # For near-surface where slant_distance < half_offset (geometrically impossible),
+        # clip to zero depth. This handles the "direct wave zone" near the surface.
+        self._depth_converted[ind_sample_time_first_arrival:] = np.sqrt(slant_distance**2 - half_offset**2)
 
 
     def _save_segy(self) -> None:
