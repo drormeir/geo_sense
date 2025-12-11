@@ -42,12 +42,9 @@ axis_type_to_label: dict[AxisType, str] = {
     AxisType.TRACE: "Trace Number",
 }
 
-def convert_velocity_to_meters_per_microsecond(velocity: float) -> int:
-    return int(round(velocity / 1_000_000.0))
-
 # Speed of light (for GPR/electromagnetic waves)
 C_VACUUM = 299_792_458.0  # m/s
-C_VACUUM_METERS_PER_MICROSECOND = convert_velocity_to_meters_per_microsecond(C_VACUUM)
+C_VACUUM_METERS_PER_NANOSECOND = C_VACUUM * 1e-9
 # GPR electromagnetic wave velocities
 GPR_VELOCITY_AIR = C_VACUUM / 1.000293          # ~299,704,645 m/s
 GPR_VELOCITY_WATER = C_VACUUM / 9.0             # ~33,310,273 m/s (at radio frequencies)
@@ -251,23 +248,22 @@ class DisplaySettingsDialog(QDialog):
         first_arrival_layout.addWidget(self.ind_sample_time_first_arrival_spinbox)
         depth_conversion_layout.addLayout(first_arrival_layout)
 
-        air_velocity_layout = QHBoxLayout(alignment=Qt.AlignCenter)
-        air_velocity_layout.addWidget(QLabel("Air velocity: [m/µs]"))
-        self.air_velocity_spinbox = QSpinBox()
-        self.air_velocity_spinbox.setRange(1, C_VACUUM_METERS_PER_MICROSECOND)
-        self.air_velocity_spinbox.setValue(convert_velocity_to_meters_per_microsecond(current_settings['air_velocity_m_per_s']))
-        self.air_velocity_spinbox.valueChanged.connect(self._on_setting_changed)
-        air_velocity_layout.addWidget(self.air_velocity_spinbox)
-        depth_conversion_layout.addLayout(air_velocity_layout)
-
-        ground_velocity_layout = QHBoxLayout(alignment=Qt.AlignCenter)
-        ground_velocity_layout.addWidget(QLabel("Ground velocity: [m/µs]"))
-        self.ground_velocity_spinbox = QSpinBox()
-        self.ground_velocity_spinbox.setRange(1, C_VACUUM_METERS_PER_MICROSECOND)
-        self.ground_velocity_spinbox.setValue(convert_velocity_to_meters_per_microsecond(current_settings['ground_velocity_m_per_s']))
-        self.ground_velocity_spinbox.valueChanged.connect(self._on_setting_changed)
-        ground_velocity_layout.addWidget(self.ground_velocity_spinbox)
-        depth_conversion_layout.addLayout(ground_velocity_layout)
+        self.velocity_spinboxes = {}
+        for key, label in [\
+            ("air_velocity_m_per_s", "Air velocity: [m/ns]"),\
+            ("ground_velocity_m_per_s", "Ground velocity: [m/ns]")]:
+            spinbox = QDoubleSpinBox()
+            # convert from meters per second to meter per nanosecond for display
+            spinbox.setRange(0.001, C_VACUUM*1e-9)
+            spinbox.setValue(current_settings[key]*1e-9)
+            spinbox.setSingleStep(0.001)
+            spinbox.setDecimals(3)
+            spinbox.valueChanged.connect(self._on_setting_changed)
+            velocity_layout = QHBoxLayout(alignment=Qt.AlignCenter)
+            velocity_layout.addWidget(QLabel(label))
+            velocity_layout.addWidget(spinbox)
+            depth_conversion_layout.addLayout(velocity_layout)
+            self.velocity_spinboxes[key] = spinbox
 
         depth_conversion_group.setLayout(depth_conversion_layout)
         layout.addWidget(depth_conversion_group)
@@ -307,8 +303,10 @@ class DisplaySettingsDialog(QDialog):
 
     def get_settings_from_layout(self):
         """Return the selected settings as a dictionary."""
-        air_velocity_m_per_s = self.air_velocity_spinbox.value()*1e6 # convert from meters per microsecond to meters per second
-        ground_velocity_m_per_s = self.ground_velocity_spinbox.value()*1e6 # convert from meters per microsecond to meters per second
+        velocity_settings = {}
+        for key, spinbox in self.velocity_spinboxes.items():
+            val = spinbox.value()*1e9 # convert from meter per nanosecond to meters per second
+            velocity_settings[key] = max(0.001*C_VACUUM, min(val, C_VACUUM))
         ret = {
             'file_name_in_plot': self.file_name_in_plot_checkbox.isChecked(),
             'top': AxisType(self.top_combo.currentText()),
@@ -327,9 +325,8 @@ class DisplaySettingsDialog(QDialog):
             'colormap': self.colormap_combo.currentText(),
             'flip_colormap': self.flip_colormap_checkbox.isChecked(),
             'ind_sample_time_first_arrival': self.ind_sample_time_first_arrival_spinbox.value(),
-            'air_velocity_m_per_s': min(air_velocity_m_per_s, C_VACUUM),
-            'ground_velocity_m_per_s': min(ground_velocity_m_per_s, C_VACUUM),
         }
+        ret.update(velocity_settings)
         assert sorted(list(ret.keys())) == sorted(list(DisplaySettingsDialog.default_settings.keys()))
         return ret
 
