@@ -12,7 +12,12 @@ from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
 from matplotlib.ticker import AutoMinorLocator, FuncFormatter
-from uas import UASSubWindow, UASMainWindow, auto_register
+from uas import UASSubWindow, UASMainWindow, auto_register, simple_interpolation, interpolate_inplace_nan_values
+from uas.utils import (
+    simple_interpolation,
+    interpolate_inplace_nan_values,
+    format_value,
+)
 
 import segyio
 from gprpy.toolbox.gprIO_MALA import readMALA
@@ -666,8 +671,8 @@ class SeismicSubWindow(UASSubWindow):
         y_mid = int(round((y0 + y1) / 2))
         dx = max(5, int(round(abs(x1 - x0)/2))) + 0.5
         dy = max(5, int(round(abs(y1 - y0)/2))) + 0.5
-        self._axes.set_xlim(x_mid - dx, x_mid + dx)
-        self._axes.set_ylim(y_mid + dy, y_mid - dy)  # Inverted for image coordinates
+        self._axes.set_xlim(max(x_mid - dx, -0.5), min(x_mid + dx, self._data.shape[1] - 0.5))
+        self._axes.set_ylim(min(y_mid + dy, self._data.shape[0] - 0.5), max(y_mid - dy, -0.5))  # Inverted for image coordinates
         self._canvas.draw_idle()
 
         self._press_event = None
@@ -1135,7 +1140,13 @@ class SeismicSubWindow(UASSubWindow):
 
         self._axes.clear()
 
-        # Restore zoom or set initial limits for new data
+        self._apply_display_settings()
+
+        # IMPORTANT: Restore zoom or set initial limits AFTER _apply_display_settings()
+        # The _apply_display_settings() method calls imshow(), which triggers matplotlib's
+        # autoscaling and can override any axis limits that were set before.
+        # Setting limits here (after imshow) ensures they are preserved and prevents the
+        # image from being shifted or having white strips at the edges.
         if xlim == (0.0, 1.0):  # Default uninitialized state
             self._axes.set_xlim(-0.5, self._data.shape[1] - 0.5)
             self._axes.set_ylim(self._data.shape[0] - 0.5, -0.5)
@@ -1143,7 +1154,6 @@ class SeismicSubWindow(UASSubWindow):
             self._axes.set_xlim(xlim)
             self._axes.set_ylim(ylim)
 
-        self._apply_display_settings()
         self._adjust_layout_with_fixed_margins()
 
         # Force canvas draw to initialize colorbar axis transforms
@@ -1227,15 +1237,6 @@ class SeismicSubWindow(UASSubWindow):
         """Callback when global settings change - update the layout."""
         if self._data is None:
             return
-        self._adjust_layout_with_fixed_margins()
-        self._canvas.draw_idle()
-
-
-    def _on_local_settings_changed(self) -> None:
-        """Callback when local settings change - update the layout."""
-        if self._data is None:
-            return
-        self._apply_display_settings()
         self._adjust_layout_with_fixed_margins()
         self._canvas.draw_idle()
 
@@ -1442,13 +1443,13 @@ class SeismicSubWindow(UASSubWindow):
             if self._trace_cumulative_distances_meters is not None:
                 def format_distance(x, pos):
                     distance = simple_interpolation(self._trace_cumulative_distances_meters, x) * GlobalSettings.display_length_factor
-                    return f'{distance:.3g}'
+                    return format_value(distance, 3)
                 axis.set_major_formatter(FuncFormatter(format_distance))
         elif axis_type == AxisType.DEPTH:
             if self._depth_converted is not None:
                 def format_depth(z, pos):
                     depth = simple_interpolation(self._depth_converted, z) * GlobalSettings.display_length_factor
-                    return f'{depth:.3g}'
+                    return format_value(depth, 3)
                 axis.set_major_formatter(FuncFormatter(format_depth))
 
         axis_min, axis_step, axis_num_samples = self._get_axis_geometry_4_display(axis_type)
@@ -1478,7 +1479,7 @@ class SeismicSubWindow(UASSubWindow):
         major_tick_positions = (major_tick_values - axis_min) / axis_step
         # Set ticks at data coordinate positions with display unit labels
         axis.set_ticks(major_tick_positions)
-        axis.set_ticklabels([f'{val:.3g}' for val in major_tick_values])
+        axis.set_ticklabels([format_value(val, 3) for val in major_tick_values])
 
         if minor_ticks_per_major < 2:
             axis.set_minor_locator(plt.NullLocator())
@@ -1643,31 +1644,3 @@ class SeismicSubWindow(UASSubWindow):
         menu.exec(self.mapToGlobal(self.mapFromGlobal(self.cursor().pos())))
 
 
-
-def simple_interpolation(vec: np.ndarray|None, x: float|None) -> float|None:
-    if vec is None or vec.size == 0 or x is None:
-        return None
-    if x <= 0:
-        return vec[0]
-    if x >= vec.size - 1:
-        return vec[-1]
-    ix = int(x)
-    dx = x - ix
-    return vec[ix] * (1-dx) + vec[ix+1] * dx
-
-
-def interpolate_inplace_nan_values(vec: np.ndarray) -> None:
-    assert vec.ndim == 1 or vec.ndim == 2
-    is_nan = np.isnan(vec)
-    if vec.ndim == 2:
-        is_nan = is_nan.any(axis=1)
-    assert is_nan.shape == (vec.shape[0],)
-    arrange_indices = np.arange(vec.shape[0])
-    nan_indices = arrange_indices[is_nan]
-    non_nan_indices = arrange_indices[~is_nan]
-    vec_non_nan = vec[~is_nan]
-    if vec.ndim == 1:
-        vec[nan_indices] = np.interp(nan_indices, non_nan_indices, vec_non_nan)
-    else:
-        for col in range(vec.shape[1]):
-            vec[nan_indices, col] = np.interp(nan_indices, non_nan_indices, vec_non_nan[:, col])

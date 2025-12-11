@@ -27,12 +27,13 @@ from uas import (
     UASApplication,
     auto_register,
     SessionManager,
+    format_value,
+    format_value_with_units,
 )
 
 from gs_icon import create_gs_icon
 from seismic_sub_win import SeismicSubWindow
-from global_settings import GlobalSettings, UnitSystem
-
+from global_settings import GlobalSettings
 
 @auto_register
 class SeismicMainWindow(UASMainWindow):
@@ -190,41 +191,24 @@ class SeismicMainWindow(UASMainWindow):
         # Format the status message
         parts = []
 
-        def format_value(value: float|int, decimals_digits: int=3, units: str='', min_decimal_digits: int=0) -> str:
-            if isinstance(value, int):
-                ret = f"{value}"
-            else:
-                while True:
-                    ret = f"{value:.{decimals_digits}f}"
-                    if not ret.endswith('0'):
-                        break
-                    if decimals_digits <= min_decimal_digits:
-                        break
-                    decimals_digits -= 1
-                if ret.endswith('.'):
-                    ret = ret[:-1]
-            if units:
-                ret += f" [{units}]"
-            return ret
-
         if 'trace_number' in hover_info:
             parts.append(f"Trace: {format_value(hover_info['trace_number'])}")
 
         distance = hover_info.get('distance', None)
         if distance is not None:
-            parts.append(f"Distance: {format_value(distance, 2, units=GlobalSettings.display_length_unit)}")
+            parts.append(f"Distance: {format_value_with_units(distance, GlobalSettings.display_length_unit, 2)}")
 
         if 'sample_number' in hover_info:
             parts.append(f"Sample: {format_value(hover_info['sample_number'])}")
 
         if 'time_value' in hover_info and 'time_units' in hover_info:
-            parts.append(f"Time: {format_value(hover_info['time_value'], 3, units=hover_info['time_units'])}")
+            parts.append(f"Time: {format_value_with_units(hover_info['time_value'], hover_info['time_units'], 3)}")
 
         if 'depth_value' in hover_info:
-            parts.append(f"Depth: {format_value(hover_info['depth_value'], 3, units=GlobalSettings.display_length_unit)}")
+            parts.append(f"Depth: {format_value_with_units(hover_info['depth_value'], GlobalSettings.display_length_unit, 3)}")
 
         if 'amplitude' in hover_info:
-            parts.append(f"Amplitude: {format_value(hover_info['amplitude'], 3, units='mV')}")
+            parts.append(f"Amplitude: {format_value_with_units(hover_info['amplitude'], 'mV', 3)}")
 
         status_message = " | ".join(parts)
         self._status_bar.showMessage(status_message)

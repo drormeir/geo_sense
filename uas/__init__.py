@@ -29,6 +29,13 @@ from .shortcuts import (
     install_shortcut_handler,
 )
 
+from .utils import (
+    format_value,
+    format_value_with_units,
+    simple_interpolation,
+    interpolate_inplace_nan_values,
+)
+
 __all__ = [
     # Factory system
     "FactoryRegistry",
@@ -55,6 +62,11 @@ __all__ = [
     "ShortcutManager",
     "ShortcutMixin",
     "install_shortcut_handler",
+    # Utils
+    "format_value",
+    "format_value_with_units",
+    "simple_interpolation",
+    "interpolate_inplace_nan_values",
 ]
 
 __version__ = "0.1.0"
