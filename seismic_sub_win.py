@@ -11,12 +11,14 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
-from matplotlib.ticker import AutoMinorLocator, FuncFormatter
-from uas import UASSubWindow, UASMainWindow, auto_register, simple_interpolation, interpolate_inplace_nan_values
-from uas.utils import (
+from matplotlib.ticker import AutoMinorLocator
+from uas import (
+    UASSubWindow,
+    UASMainWindow,
+    auto_register, 
+    format_value,
     simple_interpolation,
     interpolate_inplace_nan_values,
-    format_value,
 )
 
 import segyio
@@ -125,19 +127,19 @@ class DisplaySettingsDialog(QDialog):
         self.top_combo = QComboBox()
         self.top_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
         self.top_combo.setCurrentText(current_settings['top'].value)
-        self.top_combo.currentIndexChanged.connect(self._on_setting_changed)
+        self.top_combo.currentIndexChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.top_combo, 0, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 0, 2)
         self.top_major_tick = QSpinBox()
         self.top_major_tick.setRange(0, 10000)
         self.top_major_tick.setValue(current_settings['top_major_tick'])
-        self.top_major_tick.valueChanged.connect(self._on_setting_changed)
+        self.top_major_tick.valueChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.top_major_tick, 0, 3)
         grid_layout.addWidget(QLabel("Minor ticks per major:"), 0, 4)
         self.top_minor_ticks = QSpinBox()
         self.top_minor_ticks.setRange(0, 100)
         self.top_minor_ticks.setValue(current_settings['top_minor_ticks'])
-        self.top_minor_ticks.valueChanged.connect(self._on_setting_changed)
+        self.top_minor_ticks.valueChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.top_minor_ticks, 0, 5)
 
         # Row 1: Bottom axis
@@ -145,19 +147,19 @@ class DisplaySettingsDialog(QDialog):
         self.bottom_combo = QComboBox()
         self.bottom_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
         self.bottom_combo.setCurrentText(current_settings['bottom'].value)
-        self.bottom_combo.currentIndexChanged.connect(self._on_setting_changed)
+        self.bottom_combo.currentIndexChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.bottom_combo, 1, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 1, 2)
         self.bottom_major_tick = QSpinBox()
         self.bottom_major_tick.setRange(0, 10000)
         self.bottom_major_tick.setValue(current_settings['bottom_major_tick'])
-        self.bottom_major_tick.valueChanged.connect(self._on_setting_changed)
+        self.bottom_major_tick.valueChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.bottom_major_tick, 1, 3)
         grid_layout.addWidget(QLabel("Minor ticks per major:"), 1, 4)
         self.bottom_minor_ticks = QSpinBox()
         self.bottom_minor_ticks.setRange(0, 100)
         self.bottom_minor_ticks.setValue(current_settings['bottom_minor_ticks'])
-        self.bottom_minor_ticks.valueChanged.connect(self._on_setting_changed)
+        self.bottom_minor_ticks.valueChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.bottom_minor_ticks, 1, 5)
 
         # Row 2: Left axis
@@ -165,19 +167,19 @@ class DisplaySettingsDialog(QDialog):
         self.left_combo = QComboBox()
         self.left_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
         self.left_combo.setCurrentText(current_settings['left'].value)
-        self.left_combo.currentIndexChanged.connect(self._on_setting_changed)
+        self.left_combo.currentIndexChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.left_combo, 2, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 2, 2)
         self.left_major_tick = QSpinBox()
         self.left_major_tick.setRange(0, 10000)
         self.left_major_tick.setValue(current_settings['left_major_tick'])
-        self.left_major_tick.valueChanged.connect(self._on_setting_changed)
+        self.left_major_tick.valueChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.left_major_tick, 2, 3)
         grid_layout.addWidget(QLabel("Minor ticks per major:"), 2, 4)
         self.left_minor_ticks = QSpinBox()
         self.left_minor_ticks.setRange(0, 100)
         self.left_minor_ticks.setValue(current_settings['left_minor_ticks'])
-        self.left_minor_ticks.valueChanged.connect(self._on_setting_changed)
+        self.left_minor_ticks.valueChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.left_minor_ticks, 2, 5)
 
         # Row 3: Right axis
@@ -185,19 +187,19 @@ class DisplaySettingsDialog(QDialog):
         self.right_combo = QComboBox()
         self.right_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
         self.right_combo.setCurrentText(current_settings['right'].value)
-        self.right_combo.currentIndexChanged.connect(self._on_setting_changed)
+        self.right_combo.currentIndexChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.right_combo, 3, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 3, 2)
         self.right_major_tick = QSpinBox()
         self.right_major_tick.setRange(0, 10000)
         self.right_major_tick.setValue(current_settings['right_major_tick'])
-        self.right_major_tick.valueChanged.connect(self._on_setting_changed)
+        self.right_major_tick.valueChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.right_major_tick, 3, 3)
         grid_layout.addWidget(QLabel("Minor ticks per major:"), 3, 4)
         self.right_minor_ticks = QSpinBox()
         self.right_minor_ticks.setRange(0, 100)
         self.right_minor_ticks.setValue(current_settings['right_minor_ticks'])
-        self.right_minor_ticks.valueChanged.connect(self._on_setting_changed)
+        self.right_minor_ticks.valueChanged.connect(self._on_axes_settings_changed)
         grid_layout.addWidget(self.right_minor_ticks, 3, 5)
 
         axes_group.setLayout(grid_layout)
@@ -211,7 +213,7 @@ class DisplaySettingsDialog(QDialog):
         show_colorbar_layout = QHBoxLayout(alignment=Qt.AlignCenter)
         self.colorbar_visible_checkbox = QCheckBox("Show Colorbar")
         self.colorbar_visible_checkbox.setChecked(current_settings['colorbar_visible'])
-        self.colorbar_visible_checkbox.stateChanged.connect(self._on_setting_changed)
+        self.colorbar_visible_checkbox.stateChanged.connect(self._show_hide_colorbar)
         show_colorbar_layout.addWidget(self.colorbar_visible_checkbox)
         colormap_layout.addLayout(show_colorbar_layout)
 
@@ -221,7 +223,7 @@ class DisplaySettingsDialog(QDialog):
         self.colormap_combo = QComboBox()
         self.colormap_combo.addItems(DisplaySettingsDialog.colormap_options)
         self.colormap_combo.setCurrentText(current_settings['colormap'])
-        self.colormap_combo.currentIndexChanged.connect(self._on_setting_changed)
+        self.colormap_combo.currentIndexChanged.connect(self._update_colormap)
         colorscheme_layout.addWidget(self.colormap_combo)
         colormap_layout.addLayout(colorscheme_layout)
 
@@ -229,7 +231,7 @@ class DisplaySettingsDialog(QDialog):
         flip_checkbox_layout = QHBoxLayout(alignment=Qt.AlignCenter)
         self.flip_colormap_checkbox = QCheckBox("Flip colormap")
         self.flip_colormap_checkbox.setChecked(current_settings['flip_colormap'])
-        self.flip_colormap_checkbox.stateChanged.connect(self._on_setting_changed)
+        self.flip_colormap_checkbox.stateChanged.connect(self._update_colormap)
         flip_checkbox_layout.addWidget(self.flip_colormap_checkbox)
         colormap_layout.addLayout(flip_checkbox_layout)
 
@@ -244,7 +246,7 @@ class DisplaySettingsDialog(QDialog):
         self.ind_sample_time_first_arrival_spinbox = QSpinBox()
         self.ind_sample_time_first_arrival_spinbox.setRange(0, 10000)
         self.ind_sample_time_first_arrival_spinbox.setValue(current_settings['ind_sample_time_first_arrival'])
-        self.ind_sample_time_first_arrival_spinbox.valueChanged.connect(self._on_setting_changed)
+        self.ind_sample_time_first_arrival_spinbox.valueChanged.connect(self._on_axes_settings_changed)
         first_arrival_layout.addWidget(self.ind_sample_time_first_arrival_spinbox)
         depth_conversion_layout.addLayout(first_arrival_layout)
 
@@ -258,7 +260,7 @@ class DisplaySettingsDialog(QDialog):
             spinbox.setValue(current_settings[key]*1e-9)
             spinbox.setSingleStep(0.001)
             spinbox.setDecimals(3)
-            spinbox.valueChanged.connect(self._on_setting_changed)
+            spinbox.valueChanged.connect(self._on_axes_settings_changed)
             velocity_layout = QHBoxLayout(alignment=Qt.AlignCenter)
             velocity_layout.addWidget(QLabel(label))
             velocity_layout.addWidget(spinbox)
@@ -276,22 +278,22 @@ class DisplaySettingsDialog(QDialog):
         layout.addWidget(button_box)
 
 
-    def _on_setting_changed(self):
+    def _show_hide_colorbar(self):
+        self._old_settings['colorbar_visible'] = self.colorbar_visible_checkbox.isChecked()
+        self._parent._set_colorbar_visibility(self.colorbar_visible_checkbox.isChecked())
+
+
+    def _update_colormap(self):
+        self._old_settings['colormap'] = self.colormap_combo.currentText()
+        self._old_settings['flip_colormap'] = self.flip_colormap_checkbox.isChecked()
+        self._parent._update_colormap(scheme = self.colormap_combo.currentText(), flip = self.flip_colormap_checkbox.isChecked())
+
+    def _on_axes_settings_changed(self):
         """Called when any setting changes - update parent display immediately."""
         new_settings = self.get_settings_from_layout()
-        old_colorbar = self._old_settings.get('colorbar_visible', True)
-        new_colorbar = new_settings.get('colorbar_visible', True)
-
         # Update parent's settings
         self._parent._display_settings = new_settings
-
-        # If colorbar visibility changed, need to recreate subplots
-        if old_colorbar != new_colorbar:
-            self._parent._recreate_subplots()
-        else:
-            # Otherwise just re-render
-            self._parent.canvas_render()
-
+        self._parent.redraw_axes()
         # Update old settings for next comparison
         self._old_settings = dict(new_settings)
 
@@ -361,6 +363,7 @@ class SeismicSubWindow(UASSubWindow):
         self._colorbar: plt.Colorbar | None = None
         self._image: plt_image.AxesImage | None = None
         self._colorbar_indicator: Line2D | None = None
+        self._colorbar_indicator_amplitude: float | None = None
         self._colorbar_background = None  # Cache for blitting
 
         # trace distances data in meters
@@ -370,6 +373,7 @@ class SeismicSubWindow(UASSubWindow):
         # time samples data in seconds
         self._time_interval_seconds: float = 1.0
         self._time_first_arrival_seconds: float = 0.0
+        self._trace_time_delays_seconds: np.ndarray | None = None # time delays in seconds for each trace
         self._time_samples_seconds: np.ndarray | None = None
         self._time_display_units: str = "s"
         self._time_display_value_factor: float = 1.0 # for display time in nano seconds, milliseconds, seconds
@@ -756,23 +760,13 @@ class SeismicSubWindow(UASSubWindow):
                     self._canvas.blit(self._colorbar.ax.bbox)
             return
 
-        # If amplitude is None, use the middle of the colorbar
-        if abs(self._amplitude_min - self._amplitude_max) < 1e-9:
-            norm_value = 0.5
-        else:
-            norm_value = (amplitude - self._amplitude_min) / (self._amplitude_max - self._amplitude_min)
-            norm_value = max(0.0, min(1.0, norm_value))  # Clamp to [0, 1]
-        cmap = self._image.get_cmap()
-        rgba = cmap(norm_value)
-        inv_color = (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
-
         # Use blitting for fast updates
         if self._colorbar_background is not None:
             # Restore clean background
             self._canvas.restore_region(self._colorbar_background)
 
             # Draw new indicator line
-            self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
+            self._create_colorbar_indicator(amplitude)
 
             # Draw just the indicator
             self._colorbar.ax.draw_artist(self._colorbar_indicator)
@@ -782,7 +776,7 @@ class SeismicSubWindow(UASSubWindow):
         else:
             # Fallback: no background cached, use full redraw
             self.remove_colorbar_indicator()
-            self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
+            self._create_colorbar_indicator(amplitude)
             self._canvas.draw_idle()
 
 
@@ -811,19 +805,19 @@ class SeismicSubWindow(UASSubWindow):
 
         amplitude = self._data[iz, ix] if ix >= 0 and iz >= 0 else None
 
-        time_value = simple_interpolation(self._time_samples_seconds, z) * self._time_display_value_factor
-        distance = simple_interpolation(self._trace_cumulative_distances_meters, x) * GlobalSettings.display_length_factor
-        depth_value = simple_interpolation(self._depth_converted, z) * GlobalSettings.display_length_factor
+        time_value = simple_interpolation(self._time_samples_seconds, z)
+        distance = simple_interpolation(self._trace_cumulative_distances_meters, x)
+        depth_value = simple_interpolation(self._depth_converted, z)
 
         hover_info = {}
 
         if time_value is not None:
             hover_info['time_units'] = self._time_display_units
-            hover_info['time_value'] = time_value
+            hover_info['time_value'] = time_value * self._time_display_value_factor
         if depth_value is not None:
-            hover_info['depth_value'] = depth_value
+            hover_info['depth_value'] = depth_value * GlobalSettings.display_length_factor
         if distance is not None:
-            hover_info['distance'] = distance
+            hover_info['distance'] = distance * GlobalSettings.display_length_factor
         if amplitude is not None:
             hover_info['amplitude'] = amplitude
         if iz >= 0:
@@ -953,8 +947,8 @@ class SeismicSubWindow(UASSubWindow):
 
         if not ret:
             self._show_error("Error", f"Failed to load file: {filename}\n{error_message}")
-            self.remove_colorbar_indicator()
-            self.remove_colorbar()
+            self._remove_colorbar_indicator()
+            self._remove_colorbar()
             self._trace_coords_meters = None
             self._trace_cumulative_distances_meters = None
             self._trace_time_delays_seconds = None
@@ -1123,54 +1117,15 @@ class SeismicSubWindow(UASSubWindow):
         return True, ""
 
 
-    def canvas_render(self) -> None:
-        """Render the seismic data to the canvas."""
-        if self._data is None:
-            return
-
-        # Save current zoom state before clearing
-        xlim = self._axes.get_xlim()
-        ylim = self._axes.get_ylim()
-
-        self.remove_colorbar()
-        self.remove_colorbar_indicator()
-
-        self._axes.clear()
-
-        self._apply_display_settings()
-
-        # IMPORTANT: Restore zoom or set initial limits AFTER _apply_display_settings()
-        # The _apply_display_settings() method calls imshow(), which triggers matplotlib's
-        # autoscaling and can override any axis limits that were set before.
-        # Setting limits here (after imshow) ensures they are preserved and prevents the
-        # image from being shifted or having white strips at the edges.
-        if xlim == (0.0, 1.0):  # Default uninitialized state
-            self._axes.set_xlim(-0.5, self._data.shape[1] - 0.5)
-            self._axes.set_ylim(self._data.shape[0] - 0.5, -0.5)
-        else:
-            self._axes.set_xlim(xlim)
-            self._axes.set_ylim(ylim)
-
-        self._adjust_layout_with_fixed_margins()
-
-        # Force canvas draw to initialize colorbar axis transforms
-        self._canvas.draw()
-
-        # Save background for fast blitting of colorbar indicator
-        if self._colorbar is not None:
-            self._colorbar_background = self._canvas.copy_from_bbox(self._colorbar.ax.bbox)
-
-        self._canvas.draw_idle()
-
-
     def _on_draw_complete(self, event) -> None:
         """Cache colorbar background after draw completes for fast blitting."""
         if self._colorbar is not None and self._data is not None:
             try:
                 self._colorbar_background = self._canvas.copy_from_bbox(self._colorbar.ax.bbox)
-            except:
+            except Exception:
                 # If copy fails, just skip caching
                 self._colorbar_background = None
+
 
     def _on_resize(self, event) -> None:
         """Handle canvas resize event to maintain fixed pixel margins."""
@@ -1214,7 +1169,7 @@ class SeismicSubWindow(UASSubWindow):
         if self._display_settings.get('right', AxisType.NONE) != AxisType.NONE:
             right_image_margin_px += vertical_axes_margin_px
 
-        if self.is_colorbar_axes_visible():
+        if self._check_colorbar_axes_visibility():
             colorbar_width_px = GlobalSettings.margins_px['colorbar_width']
             colorbar_right_margin_px = vertical_axes_margin_px + base_horizontal_margin_px
             colorbar_left_margin_px = colorbar_width_px + colorbar_right_margin_px
@@ -1222,7 +1177,6 @@ class SeismicSubWindow(UASSubWindow):
             colorbar_width = colorbar_width_px / width_px
             self._colorbar_axes.set_position([colorbar_left, bottom, colorbar_width, height])
             right_image_margin_px += colorbar_left_margin_px
-
 
         image_left = left_image_margin_px / width_px
         image_width = 1.0 - (left_image_margin_px + right_image_margin_px) / width_px
@@ -1235,7 +1189,6 @@ class SeismicSubWindow(UASSubWindow):
         if self._data is None:
             return
         self._adjust_layout_with_fixed_margins()
-        self._canvas.draw_idle()
 
 
     def _recreate_subplots(self) -> None:
@@ -1250,9 +1203,49 @@ class SeismicSubWindow(UASSubWindow):
             self.canvas_render()
 
 
+    def canvas_render(self) -> None:
+        """Render the seismic data to the canvas."""
+        if self._data is None:
+            return
+
+        # Save current zoom state before clearing
+        xlim = self._axes.get_xlim()
+        ylim = self._axes.get_ylim()
+
+        self._remove_colorbar()
+        self._remove_colorbar_indicator()
+
+        self._axes.clear()
+
+        self._apply_display_settings()
+
+        # IMPORTANT: Restore zoom or set initial limits AFTER _apply_display_settings()
+        # The _apply_display_settings() method calls imshow(), which triggers matplotlib's
+        # autoscaling and can override any axis limits that were set before.
+        # Setting limits here (after imshow) ensures they are preserved and prevents the
+        # image from being shifted or having white strips at the edges.
+        if xlim == (0.0, 1.0):  # Default uninitialized state
+            self._axes.set_xlim(-0.5, self._data.shape[1] - 0.5)
+            self._axes.set_ylim(self._data.shape[0] - 0.5, -0.5)
+        else:
+            self._axes.set_xlim(xlim)
+            self._axes.set_ylim(ylim)
+
+        self._adjust_layout_with_fixed_margins()
+
+        # Force canvas draw to initialize colorbar axis transforms
+        self._canvas.draw()
+
+        # Save background for fast blitting of colorbar indicator
+        if self._colorbar is not None:
+            self._colorbar_background = self._canvas.copy_from_bbox(self._colorbar.ax.bbox)
+
+        self._canvas.draw_idle()
+
+
     def create_subplots(self) -> None:
         # Note: We'll set margins and wspace later via _adjust_layout_with_fixed_margins
-        self.remove_colorbar_axes()
+        self._remove_colorbar_axes()
         if self._display_settings.get('colorbar_visible', True):
             self._axes = self._fig.add_subplot(1, 2, 1)
             self._colorbar_axes = self._fig.add_subplot(1, 2, 2)
@@ -1261,41 +1254,6 @@ class SeismicSubWindow(UASSubWindow):
             self._colorbar_axes = None
 
 
-    def remove_colorbar_axes(self) -> None:
-        #check if colorbar_axes is defined, if so, remove it
-        if not hasattr(self, '_colorbar_axes'):
-            self._colorbar_axes = None
-            return
-        if self._colorbar_axes is None:
-            return
-        self.remove_colorbar()
-        if self._colorbar_axes.figure is self._fig and self._colorbar_axes in self._fig.axes:
-            self._colorbar_axes.remove()
-        self._colorbar_axes = None
-
-
-    def remove_colorbar(self) -> None:
-        if self._colorbar is None:
-            return
-        self.remove_colorbar_indicator()
-
-        # Only remove if the colorbar's axes is still in the figure
-        if self._colorbar.ax is not None and self._colorbar.ax.figure is self._fig and self._colorbar.ax in self._fig.axes:
-            try:
-                self._colorbar.remove()
-            except (AttributeError, ValueError):
-                # Colorbar might already be in an inconsistent state, just clear the reference
-                pass
-
-        self._colorbar = None
-        self._colorbar_background = None  # Clear cached background
-
-
-    def remove_colorbar_indicator(self) -> None:
-        if self._colorbar_indicator is None:
-            return        
-        self._colorbar_indicator.set_visible(False)
-        self._colorbar_indicator = None
 
 
     def closeEvent(self, event) -> None:
@@ -1324,6 +1282,31 @@ class SeismicSubWindow(UASSubWindow):
         self._settings_dialog = None
 
 
+    def _update_colormap(self, scheme: str|None, flip: bool|None):
+        if scheme:
+            self._display_settings['colormap'] = scheme
+        if flip is not None: # work for both values of flip (True/False)
+            self._display_settings['flip_colormap'] = flip
+        self._remove_colorbar_axes()  # force redraw of the colorbar
+        self._check_colorbar_axes_visibility()
+        self._adjust_layout_with_fixed_margins()
+
+
+    def _set_colorbar_visibility(self, visible: bool|int):
+        if isinstance(visible, int):
+            visible = visible != 0
+        self._display_settings['colorbar_visible'] = visible
+        self._check_colorbar_axes_visibility()
+        self._adjust_layout_with_fixed_margins()
+
+
+    def redraw_axes_of_image(self) -> None:
+        """Redraw the axes of the image."""
+        if self._data is None:
+            return
+        self._apply_display_settings()
+        
+
     def _apply_display_settings(self) -> None:
         """Apply the display settings to the axes."""
         if self._data is None:
@@ -1339,18 +1322,7 @@ class SeismicSubWindow(UASSubWindow):
         if flip_colormap:
             colormap = colormap + '_r'
         self._image = self._axes.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
-        if self.is_colorbar_axes_visible():
-            self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude [mV]")
-            colorbar_ticks = list(self._colorbar.get_ticks())
-            # assuming the colorbar ticks are already sorted, add min and max if not already present
-            delta_amplitude = (self._amplitude_max - self._amplitude_min) * 0.05
-            # remove ticks that are too close to the min and max
-            while colorbar_ticks and colorbar_ticks[0] <= self._amplitude_min + delta_amplitude:
-                colorbar_ticks = colorbar_ticks[1:]
-            while colorbar_ticks and colorbar_ticks[-1] >= self._amplitude_max - delta_amplitude:
-                colorbar_ticks = colorbar_ticks[:-1]
-            colorbar_ticks = [self._amplitude_min] + colorbar_ticks + [self._amplitude_max]
-            self._colorbar.set_ticks(colorbar_ticks)
+        self._check_colorbar_axes_visibility()
 
         if file_name_in_plot:
             self._axes.set_title(os.path.basename(self._filename))
@@ -1401,20 +1373,93 @@ class SeismicSubWindow(UASSubWindow):
             self._apply_tick_settings(ax2.yaxis, right, self._display_settings['right_major_tick'], self._display_settings['right_minor_ticks'])
 
 
-    def is_colorbar_axes_visible(self) -> bool:
+    def _check_colorbar_axes_visibility(self) -> bool:
         colorbar_visible = self._display_settings['colorbar_visible'] # must check with default value True
         if not colorbar_visible or self._data is None or np.isnan(self._amplitude_min) or np.isnan(self._amplitude_max):
-            self.remove_colorbar_axes()
+            self._remove_colorbar_axes()
             return False
             
         if self._colorbar_axes is not None and self._colorbar_axes.figure is not self._fig:
-            self.remove_colorbar_axes()
+            self._remove_colorbar_axes()
         if self._colorbar_axes is None:
             if len(self._fig.axes) == 1: # if there is only one subplot, add a new subplot for the colorbar
                 self._colorbar_axes = self._fig.add_subplot(1, 2, 2)
             else:
                 self._colorbar_axes = self._fig.axes[1]
+        self._create_colorbar()
         return True
+
+
+    def _remove_colorbar_axes(self) -> None:
+        self._remove_colorbar()
+        #check if colorbar_axes is defined, if so, remove it
+        if not hasattr(self, '_colorbar_axes'):
+            self._colorbar_axes = None
+            return
+        if self._colorbar_axes is None:
+            return
+        if self._colorbar_axes.figure is self._fig and self._colorbar_axes in self._fig.axes:
+            self._colorbar_axes.remove()
+        self._colorbar_axes = None
+
+
+    def _remove_colorbar(self) -> None:
+        self._remove_colorbar_indicator()
+        if self._colorbar is None:
+            return
+
+        # Only remove if the colorbar's axes is still in the figure
+        if self._colorbar.ax is not None and self._colorbar.ax.figure is self._fig and self._colorbar.ax in self._fig.axes:
+            try:
+                self._colorbar.remove()
+            except (AttributeError, ValueError):
+                # Colorbar might already be in an inconsistent state, just clear the reference
+                pass
+
+        self._colorbar = None
+        self._colorbar_background = None  # Clear cached background
+
+
+    def _remove_colorbar_indicator(self) -> None:
+        if self._colorbar_indicator is None:
+            return        
+        self._colorbar_indicator.set_visible(False)
+        self._colorbar_indicator = None
+
+
+    def _create_colorbar(self):
+        if self._colorbar is not None:
+            return
+        self._remove_colorbar_indicator()
+        self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_axes, label="Amplitude [mV]")
+        colorbar_ticks = list(self._colorbar.get_ticks())
+        # assuming the colorbar ticks are already sorted, add min and max if not already present
+        delta_amplitude = (self._amplitude_max - self._amplitude_min) * 0.05
+        # remove ticks that are too close to the min and max
+        while colorbar_ticks and colorbar_ticks[0] <= self._amplitude_min + delta_amplitude:
+            colorbar_ticks = colorbar_ticks[1:]
+        while colorbar_ticks and colorbar_ticks[-1] >= self._amplitude_max - delta_amplitude:
+            colorbar_ticks = colorbar_ticks[:-1]
+        colorbar_ticks = [self._amplitude_min] + colorbar_ticks + [self._amplitude_max]
+        self._colorbar.set_ticks(colorbar_ticks)
+        self._create_colorbar_indicator(self._colorbar_indicator_amplitude)
+
+
+    def _create_colorbar_indicator(self, amplitude: float|None) -> None:
+        if self._colorbar_indicator is not None or self._colorbar is None or amplitude is None or self._image is None:
+            return
+
+        if abs(self._amplitude_min - self._amplitude_max) < 1e-9:
+            norm_value = 0.5
+        else:
+            norm_value = (amplitude - self._amplitude_min) / (self._amplitude_max - self._amplitude_min)
+            norm_value = max(0.0, min(1.0, norm_value))  # Clamp to [0, 1]
+        cmap = self._image.get_cmap()
+        rgba = cmap(norm_value)
+        inv_color = (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
+
+        self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
+        self._colorbar_indicator_amplitude = amplitude
 
 
     def _apply_tick_settings(self, axis: plt.Axes, axis_type: AxisType, major_tick_distance: float, minor_ticks_per_major: int) -> None:
@@ -1445,7 +1490,10 @@ class SeismicSubWindow(UASSubWindow):
             axis_vector_values = self._trace_cumulative_distances_meters * GlobalSettings.display_length_factor
         else:
             axis_vector_values = None
-
+        if axis_vector_values is not None:
+            axis_vector_indices = np.arange(len(axis_vector_values))
+        else:
+            axis_vector_indices = None
         axis_min, axis_step, axis_num_samples = self._get_axis_geometry_4_display(axis_type)
 
         minor_ticks_per_major = min(minor_ticks_per_major, axis_num_samples)
@@ -1471,7 +1519,7 @@ class SeismicSubWindow(UASSubWindow):
 
         major_tick_values = np.arange(n_min, n_max + 1) * major_tick_distance
         if axis_vector_values is not None:
-            major_tick_positions = np.interp(major_tick_values, axis_vector_values, np.arange(len(axis_vector_values)))
+            major_tick_positions = np.interp(major_tick_values, axis_vector_values, axis_vector_indices)
         else:
             major_tick_positions = (major_tick_values - axis_min) / axis_step
         # Set ticks at data coordinate positions with display unit labels
@@ -1486,11 +1534,14 @@ class SeismicSubWindow(UASSubWindow):
         minor_tick_distance = major_tick_distance / minor_ticks_per_major
         n_min_minor = int(abs(axis_min) / minor_tick_distance) * sign_axis_min
         n_max_minor = int(abs(axis_max) / minor_tick_distance) * sign_axis_max
-        minor_tick_values = [i * minor_tick_distance for i in range(n_min_minor, n_max_minor + 1)
-                            if i % minor_ticks_per_major != 0]
+        minor_tick_values = np.arange(n_min_minor, n_max_minor + 1)
+        minor_tick_values = minor_tick_values[minor_tick_values % minor_ticks_per_major != 0] * minor_tick_distance
 
         # Convert to data coordinates
-        minor_tick_positions = [(val - axis_min) / axis_step for val in minor_tick_values]
+        if axis_vector_values is not None:
+            minor_tick_positions = np.interp(minor_tick_values, axis_vector_values, axis_vector_indices)
+        else:
+            minor_tick_positions = (minor_tick_values - axis_min) / axis_step
         axis.set_ticks(minor_tick_positions, minor=True)
 
 
@@ -1530,7 +1581,7 @@ class SeismicSubWindow(UASSubWindow):
 
         # For near-surface where slant_distance < half_offset (geometrically impossible),
         # clip to zero depth. This handles the "direct wave zone" near the surface.
-        self._depth_converted[ind_sample_time_first_arrival:] = np.sqrt(slant_distance**2 - half_offset**2)
+        self._depth_converted[ind_sample_time_first_arrival:] = np.sqrt(np.maximum(slant_distance**2 - half_offset**2, 0))
 
 
     def _save_segy(self) -> None:
