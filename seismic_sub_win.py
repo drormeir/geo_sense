@@ -115,7 +115,7 @@ class DisplaySettingsDialog(QDialog):
         # File name in plot checkbox
         self.file_name_in_plot_checkbox = QCheckBox("Show file name in plot")
         self.file_name_in_plot_checkbox.setChecked(current_settings['file_name_in_plot'])
-        self.file_name_in_plot_checkbox.stateChanged.connect(self._on_image_axes_settings_changed)
+        self.file_name_in_plot_checkbox.stateChanged.connect(self._on_file_name_in_plot_settings_changed)
         layout.addWidget(self.file_name_in_plot_checkbox)
 
         # Create grid layout for axes settings (table format without titles)
@@ -127,19 +127,19 @@ class DisplaySettingsDialog(QDialog):
         self.top_combo = QComboBox()
         self.top_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
         self.top_combo.setCurrentText(current_settings['top'].value)
-        self.top_combo.currentIndexChanged.connect(self._on_image_axes_settings_changed)
+        self.top_combo.currentIndexChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.top_combo, 0, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 0, 2)
         self.top_major_tick = QSpinBox()
         self.top_major_tick.setRange(0, 10000)
         self.top_major_tick.setValue(current_settings['top_major_tick'])
-        self.top_major_tick.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.top_major_tick.valueChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.top_major_tick, 0, 3)
         grid_layout.addWidget(QLabel("Minor ticks per major:"), 0, 4)
         self.top_minor_ticks = QSpinBox()
         self.top_minor_ticks.setRange(0, 100)
         self.top_minor_ticks.setValue(current_settings['top_minor_ticks'])
-        self.top_minor_ticks.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.top_minor_ticks.valueChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.top_minor_ticks, 0, 5)
 
         # Row 1: Bottom axis
@@ -147,19 +147,19 @@ class DisplaySettingsDialog(QDialog):
         self.bottom_combo = QComboBox()
         self.bottom_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.horizontal_options))
         self.bottom_combo.setCurrentText(current_settings['bottom'].value)
-        self.bottom_combo.currentIndexChanged.connect(self._on_image_axes_settings_changed)
+        self.bottom_combo.currentIndexChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.bottom_combo, 1, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 1, 2)
         self.bottom_major_tick = QSpinBox()
         self.bottom_major_tick.setRange(0, 10000)
         self.bottom_major_tick.setValue(current_settings['bottom_major_tick'])
-        self.bottom_major_tick.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.bottom_major_tick.valueChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.bottom_major_tick, 1, 3)
         grid_layout.addWidget(QLabel("Minor ticks per major:"), 1, 4)
         self.bottom_minor_ticks = QSpinBox()
         self.bottom_minor_ticks.setRange(0, 100)
         self.bottom_minor_ticks.setValue(current_settings['bottom_minor_ticks'])
-        self.bottom_minor_ticks.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.bottom_minor_ticks.valueChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.bottom_minor_ticks, 1, 5)
 
         # Row 2: Left axis
@@ -167,19 +167,19 @@ class DisplaySettingsDialog(QDialog):
         self.left_combo = QComboBox()
         self.left_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
         self.left_combo.setCurrentText(current_settings['left'].value)
-        self.left_combo.currentIndexChanged.connect(self._on_image_axes_settings_changed)
+        self.left_combo.currentIndexChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.left_combo, 2, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 2, 2)
         self.left_major_tick = QSpinBox()
         self.left_major_tick.setRange(0, 10000)
         self.left_major_tick.setValue(current_settings['left_major_tick'])
-        self.left_major_tick.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.left_major_tick.valueChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.left_major_tick, 2, 3)
         grid_layout.addWidget(QLabel("Minor ticks per major:"), 2, 4)
         self.left_minor_ticks = QSpinBox()
         self.left_minor_ticks.setRange(0, 100)
         self.left_minor_ticks.setValue(current_settings['left_minor_ticks'])
-        self.left_minor_ticks.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.left_minor_ticks.valueChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.left_minor_ticks, 2, 5)
 
         # Row 3: Right axis
@@ -187,19 +187,19 @@ class DisplaySettingsDialog(QDialog):
         self.right_combo = QComboBox()
         self.right_combo.addItems(self._enum_to_string_list(DisplaySettingsDialog.vertical_options))
         self.right_combo.setCurrentText(current_settings['right'].value)
-        self.right_combo.currentIndexChanged.connect(self._on_image_axes_settings_changed)
+        self.right_combo.currentIndexChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.right_combo, 3, 1)
         grid_layout.addWidget(QLabel("Major tick:"), 3, 2)
         self.right_major_tick = QSpinBox()
         self.right_major_tick.setRange(0, 10000)
         self.right_major_tick.setValue(current_settings['right_major_tick'])
-        self.right_major_tick.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.right_major_tick.valueChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.right_major_tick, 3, 3)
         grid_layout.addWidget(QLabel("Minor ticks per major:"), 3, 4)
         self.right_minor_ticks = QSpinBox()
         self.right_minor_ticks.setRange(0, 100)
         self.right_minor_ticks.setValue(current_settings['right_minor_ticks'])
-        self.right_minor_ticks.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.right_minor_ticks.valueChanged.connect(self._on_image_four_axes_settings_changed)
         grid_layout.addWidget(self.right_minor_ticks, 3, 5)
 
         image_axes_group.setLayout(grid_layout)
@@ -246,7 +246,7 @@ class DisplaySettingsDialog(QDialog):
         self.ind_sample_time_first_arrival_spinbox = QSpinBox()
         self.ind_sample_time_first_arrival_spinbox.setRange(0, 10000)
         self.ind_sample_time_first_arrival_spinbox.setValue(current_settings['ind_sample_time_first_arrival'])
-        self.ind_sample_time_first_arrival_spinbox.valueChanged.connect(self._on_image_axes_settings_changed)
+        self.ind_sample_time_first_arrival_spinbox.valueChanged.connect(self._on_depth_conversion_settings_changed)
         first_arrival_layout.addWidget(self.ind_sample_time_first_arrival_spinbox)
         depth_conversion_layout.addLayout(first_arrival_layout)
 
@@ -260,7 +260,7 @@ class DisplaySettingsDialog(QDialog):
             spinbox.setValue(current_settings[key]*1e-9)
             spinbox.setSingleStep(0.001)
             spinbox.setDecimals(3)
-            spinbox.valueChanged.connect(self._on_image_axes_settings_changed)
+            spinbox.valueChanged.connect(self._on_depth_conversion_settings_changed)
             velocity_layout = QHBoxLayout(alignment=Qt.AlignCenter)
             velocity_layout.addWidget(QLabel(label))
             velocity_layout.addWidget(spinbox)
@@ -288,14 +288,31 @@ class DisplaySettingsDialog(QDialog):
         self._old_settings['flip_colormap'] = self.flip_colormap_checkbox.isChecked()
         self._parent._update_colormap(scheme = self.colormap_combo.currentText(), flip = self.flip_colormap_checkbox.isChecked())
 
-    def _on_image_axes_settings_changed(self):
+    def _on_file_name_in_plot_settings_changed(self):
+        self._old_settings['file_name_in_plot'] = self.file_name_in_plot_checkbox.isChecked()
+        self._parent._update_file_name_in_plot(self.file_name_in_plot_checkbox.isChecked())
+        self._parent._canvas.draw_idle()
+
+    def _on_depth_conversion_settings_changed(self):
+        self._old_settings['ind_sample_time_first_arrival'] = self.ind_sample_time_first_arrival_spinbox.value()
+        self._parent._display_settings['ind_sample_time_first_arrival'] = self.ind_sample_time_first_arrival_spinbox.value()
+        for key, spinbox in self.velocity_spinboxes.items():
+            self._old_settings[key] = spinbox.value() * 1e9 # convert from meter per nanosecond to meters per second
+            self._parent._display_settings[key] = spinbox.value() * 1e9 # convert from meter per nanosecond to meters per second
+        self._parent._calculate_depth_converted()
+        self._parent._apply_image_four_axes_tick_settings()
+        self._parent._canvas.draw_idle()
+
+
+    def _on_image_four_axes_settings_changed(self):
         """Called when any setting changes - update parent display immediately."""
         new_settings = self.get_settings_from_layout()
-        # Update parent's settings
-        self._parent._display_settings = new_settings
-        self._parent.redraw_image_ax()
         # Update old settings for next comparison
         self._old_settings = dict(new_settings)
+        # Update parent's settings
+        self._parent._display_settings = new_settings
+        self._parent._apply_image_four_axes_tick_settings()
+        self._parent._canvas.draw_idle()
 
     def reject(self):
         """Restore old settings when dialog is cancelled."""
@@ -969,6 +986,8 @@ class SeismicSubWindow(UASSubWindow):
         self._amplitude_max = float(np.max(self._data))
         # Calculate time range in seconds
         nt, nx = self._data.shape
+        assert self._trace_time_delays_seconds is not None
+        assert len(self._trace_time_delays_seconds) == nt
         self._time_first_arrival_seconds = np.median(self._trace_time_delays_seconds)
         time_range_seconds = (nt - 1) * self._time_interval_seconds
         if self._time_first_arrival_seconds < self._time_interval_seconds or self._time_first_arrival_seconds >= time_range_seconds - self._time_interval_seconds:
@@ -999,7 +1018,7 @@ class SeismicSubWindow(UASSubWindow):
         self._trace_cumulative_distances_meters = np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
         assert len(self._trace_cumulative_distances_meters) == len(self._trace_coords_meters)
 
-        self.calculate_depth_converted()
+        self._calculate_depth_converted()
 
         self.canvas_render()
         return ret
@@ -1058,14 +1077,13 @@ class SeismicSubWindow(UASSubWindow):
                         x *= float(scalar)
                         y *= float(scalar)
                     else:
+                        # ignore scalar or treat it as 1.0
                         pass
                     coord_units = trace_header[segyio.TraceField.CoordinateUnits]
                     if coord_units in segy_coord_unit_map:
                         if segy_coord_unit_map[coord_units] == "length":
                             x *= factor_length_2_mks
                             y *= factor_length_2_mks
-                            pass
-                        pass
                     coords[i] = [x, y]
                     trace_offset_meters[i] = trace_header[segyio.TraceField.Offset] * factor_length_2_mks
 
@@ -1302,13 +1320,6 @@ class SeismicSubWindow(UASSubWindow):
         self._adjust_layout_with_fixed_margins()
 
 
-    def redraw_image_ax(self) -> None:
-        """Redraw the image_ax of the image."""
-        if self._data is None:
-            return
-        self._apply_display_settings()
-        
-
     def _apply_display_settings(self) -> None:
         """Apply the display settings to the image_ax."""
         if self._data is None:
@@ -1316,18 +1327,32 @@ class SeismicSubWindow(UASSubWindow):
         # recalculate time samples seconds
         ind_sample_time_first_arrival = self._display_settings['ind_sample_time_first_arrival']
         self._time_samples_seconds = np.arange(-ind_sample_time_first_arrival,self._data.shape[0]-ind_sample_time_first_arrival) * self._time_interval_seconds
-        self.calculate_depth_converted()
+        self._calculate_depth_converted()
         colormap = self._display_settings['colormap']
         flip_colormap = self._display_settings['flip_colormap']
-        file_name_in_plot = self._display_settings['file_name_in_plot']
         # Add '_r' suffix to flip the colormap
         if flip_colormap:
             colormap = colormap + '_r'
         self._image = self._image_ax.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
         self._check_colorbar_ax_visibility()
+        self._update_file_name_in_plot(None)
+        self._apply_image_four_axes_tick_settings()
 
-        if file_name_in_plot:
+
+    def _update_file_name_in_plot(self, set_value: bool|None) -> None:
+        if set_value is not None:
+            self._display_settings['file_name_in_plot'] = set_value
+        else:
+            set_value = self._display_settings['file_name_in_plot']
+
+        if set_value:
             self._image_ax.set_title(os.path.basename(self._filename))
+        else:
+            self._image_ax.set_title("")
+
+
+    def _apply_image_four_axes_tick_settings(self) -> None:
+        """Apply tick settings and labels to all four axes surrounding the image."""
 
         # Get current settings
         top = self._display_settings['top']
@@ -1348,21 +1373,21 @@ class SeismicSubWindow(UASSubWindow):
             ax2 = self._image_ax.secondary_xaxis('top')
             ax2.set_visible(True)
             ax2.tick_params(axis='x', top=True, labeltop=True)
-            self._apply_tick_settings(ax2.xaxis, top, self._display_settings['top_major_tick'], self._display_settings['top_minor_ticks'])
+            self._apply_single_axis_tick_settings(ax2.xaxis, top, self._display_settings['top_major_tick'], self._display_settings['top_minor_ticks'])
 
         # Apply bottom axis
         if bottom == AxisType.NONE:
             self._image_ax.xaxis.set_tick_params(bottom=False, labelbottom=False)
         else:
             self._image_ax.xaxis.set_tick_params(bottom=True, labelbottom=True)
-            self._apply_tick_settings(self._image_ax.xaxis, bottom, self._display_settings['bottom_major_tick'], self._display_settings['bottom_minor_ticks'])
+            self._apply_single_axis_tick_settings(self._image_ax.xaxis, bottom, self._display_settings['bottom_major_tick'], self._display_settings['bottom_minor_ticks'])
 
         # Apply left axis
         if left == AxisType.NONE:
             self._image_ax.yaxis.set_tick_params(left=False, labelleft=False)
         else:
             self._image_ax.yaxis.set_tick_params(left=True, labelleft=True)
-            self._apply_tick_settings(self._image_ax.yaxis, left, self._display_settings['left_major_tick'], self._display_settings['left_minor_ticks'])
+            self._apply_single_axis_tick_settings(self._image_ax.yaxis, left, self._display_settings['left_major_tick'], self._display_settings['left_minor_ticks'])
 
         # Apply right axis
         if right == AxisType.NONE:
@@ -1372,7 +1397,7 @@ class SeismicSubWindow(UASSubWindow):
             ax2 = self._image_ax.secondary_yaxis('right')
             ax2.set_visible(True)
             ax2.tick_params(axis='y', right=True, labelright=True)
-            self._apply_tick_settings(ax2.yaxis, right, self._display_settings['right_major_tick'], self._display_settings['right_minor_ticks'])
+            self._apply_single_axis_tick_settings(ax2.yaxis, right, self._display_settings['right_major_tick'], self._display_settings['right_minor_ticks'])
 
 
     def _check_colorbar_ax_visibility(self) -> bool:
@@ -1464,7 +1489,7 @@ class SeismicSubWindow(UASSubWindow):
         self._colorbar_indicator = None
 
 
-    def _apply_tick_settings(self, axis: plt.Axes, axis_type: AxisType, major_tick_distance: float, minor_ticks_per_major: int) -> None:
+    def _apply_single_axis_tick_settings(self, axis: plt.Axes, axis_type: AxisType, major_tick_distance: float, minor_ticks_per_major: int) -> None:
         """
         Apply tick settings to an axis with a reference offset.
 
@@ -1547,7 +1572,7 @@ class SeismicSubWindow(UASSubWindow):
         axis.set_ticks(minor_tick_positions, minor=True)
 
 
-    def calculate_depth_converted(self) -> None:
+    def _calculate_depth_converted(self) -> None:
         """
         Calculate depth for bistatic GPR using geometric correction.
 
