@@ -438,6 +438,12 @@ class SeismicSubWindow(UASSubWindow):
         # Replace "Home" action with custom behavior
         self._replace_home_action()
 
+        # Replace "Save" action to show save menu
+        self._replace_save_action()
+
+        # Add Open button to toolbar
+        self._add_open_button()
+
         # Add context menu to NavigationToolbar
         self._nav_toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
         self._nav_toolbar.customContextMenuRequested.connect(self._show_nav_toolbar_context_menu)
@@ -873,17 +879,16 @@ class SeismicSubWindow(UASSubWindow):
         self.canvas_render()
 
 
-    def _show_context_menu(self, position) -> None:
-        """Show context menu on right-click."""
-        context_menu = QMenu(self)
-
-        # Load action (single option for all formats)
-        load_action = QAction("Load...", self)
-        load_action.triggered.connect(self.load_file_dialog)
-        context_menu.addAction(load_action)
-
-        # Save submenu
+    def _create_save_menu(self) -> QMenu:
+        """Create and return the save submenu with all format options."""
         save_menu = QMenu("Save as...", self)
+
+        # Save as PNG (uses matplotlib's save dialog)
+        save_png_action = QAction("As PNG Image...", self)
+        save_png_action.triggered.connect(self._nav_toolbar.save_figure)
+        save_menu.addAction(save_png_action)
+
+        save_menu.addSeparator()
 
         save_segy_action = QAction("As SEGY File...", self)
         save_segy_action.triggered.connect(self._save_segy)
@@ -897,7 +902,20 @@ class SeismicSubWindow(UASSubWindow):
         save_rd7_action.triggered.connect(self._save_rd7)
         save_menu.addAction(save_rd7_action)
 
-        context_menu.addMenu(save_menu)
+        return save_menu
+
+
+    def _show_context_menu(self, position) -> None:
+        """Show context menu on right-click."""
+        context_menu = QMenu(self)
+
+        # Load action (single option for all formats)
+        load_action = QAction("Open file...", self)
+        load_action.triggered.connect(self.load_file_dialog)
+        context_menu.addAction(load_action)
+
+        # Save submenu
+        context_menu.addMenu(self._create_save_menu())
 
         # Display Settings action
         display_settings_action = QAction("Display Settings...", self)
@@ -1267,6 +1285,24 @@ class SeismicSubWindow(UASSubWindow):
         super().closeEvent(event)
 
 
+    def _add_open_button(self) -> None:
+        """Add an Open button to the NavigationToolbar."""
+        # Get the standard "Open" icon from the Qt style
+        open_icon = self.style().standardIcon(self.style().StandardPixmap.SP_DialogOpenButton)
+
+        # Create the Open action
+        open_action = QAction(open_icon, "Open", self)
+        open_action.setToolTip("Open file")
+        open_action.triggered.connect(self.load_file_dialog)
+
+        # Insert the Open action at the beginning of the toolbar (before Home)
+        actions = self._nav_toolbar.actions()
+        if actions:
+            self._nav_toolbar.insertAction(actions[0], open_action)
+        else:
+            self._nav_toolbar.addAction(open_action)
+
+
     def _replace_configure_subplots_action(self) -> None:
         """Replace the 'Configure subplots' toolbar button with Display Settings."""
         # Find the configure subplots action in the NavigationToolbar
@@ -1303,6 +1339,42 @@ class SeismicSubWindow(UASSubWindow):
                 # Connect to our custom home handler
                 action.triggered.connect(self._custom_home)
                 break
+
+
+    def _replace_save_action(self) -> None:
+        """Replace the 'Save' toolbar button to show save menu."""
+        # Find the save action in the NavigationToolbar
+        for action in self._nav_toolbar.actions():
+            # The save action typically has "Save" in its text or tooltip
+            if "Save" in action.text() or "Save" in action.toolTip():
+                # Store reference to the action for positioning the menu
+                self._save_toolbar_action = action
+
+                # Disconnect the default action
+                try:
+                    action.triggered.disconnect()
+                except:
+                    pass  # In case it's not connected
+
+                # Connect to our custom handler that shows the menu
+                action.triggered.connect(self._show_save_menu_from_toolbar)
+                break
+
+
+    def _show_save_menu_from_toolbar(self) -> None:
+        """Show the save menu when Save toolbar button is clicked."""
+        # Create the save menu
+        save_menu = self._create_save_menu()
+
+        # Find the Save button widget to position the menu below it
+        for widget in self._nav_toolbar.children():
+            if hasattr(widget, 'defaultAction') and widget.defaultAction() == self._save_toolbar_action:
+                # Show menu below the button
+                save_menu.exec(widget.mapToGlobal(widget.rect().bottomLeft()))
+                return
+
+        # Fallback: show at toolbar position if we can't find the button
+        save_menu.exec(self._nav_toolbar.mapToGlobal(self._nav_toolbar.rect().center()))
 
 
     def _show_display_settings(self) -> None:

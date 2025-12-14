@@ -107,16 +107,6 @@ class SeismicMainWindow(UASMainWindow):
         settings_menu = menubar.addMenu("&Settings")
         GlobalSettings.create_action(settings_menu, parent=self)
 
-        # Setup toolbar
-        self._setup_toolbar()
-
-
-    def _setup_toolbar(self) -> None:
-        """Set up the toolbar with quick access buttons."""
-        toolbar = self.create_toolbar("Main Toolbar")
-        toolbar.addAction("Open", self.open_seismic_file)
-
-
     def open_seismic_file(self) -> None:
         SeismicSubWindow.create_from_load_file(self)
 
