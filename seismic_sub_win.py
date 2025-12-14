@@ -3,7 +3,25 @@ import os
 from typing import Any
 from enum import Enum
 
-from PySide6.QtWidgets import QMessageBox, QVBoxLayout, QFileDialog, QMenu, QToolBar, QDialog, QFormLayout, QComboBox, QDialogButtonBox, QGroupBox, QCheckBox, QSpinBox, QDoubleSpinBox, QHBoxLayout, QLabel, QGridLayout
+from PySide6.QtWidgets import (
+    QMessageBox,
+    QVBoxLayout,
+    QFileDialog,
+    QMenu,
+    QToolBar,
+    QDialog,
+    QFormLayout,
+    QComboBox,
+    QDialogButtonBox,
+    QGroupBox,
+    QCheckBox,
+    QSpinBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
+    QLabel,
+    QGridLayout,
+)
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
@@ -300,7 +318,6 @@ class DisplaySettingsDialog(QDialog):
         self._parent._update_first_arrival_sample(self.ind_sample_time_first_arrival_spinbox.value())            
         self._old_settings['ind_sample_time_first_arrival'] = self._parent._display_settings['ind_sample_time_first_arrival'] # updated value
         self._parent._apply_image_four_axes_tick_settings()
-        self._parent.render_four_axes()
 
 
     def _on_image_four_axes_settings_changed(self):
@@ -311,7 +328,7 @@ class DisplaySettingsDialog(QDialog):
         # Update parent's settings
         self._parent._display_settings = new_settings
         self._parent._apply_image_four_axes_tick_settings()
-        self._parent.render_four_axes()
+
 
     def reject(self):
         """Restore old settings when dialog is cancelled."""
@@ -878,7 +895,7 @@ class SeismicSubWindow(UASSubWindow):
             self._display_settings = settings
         self._update_first_arrival_sample(self._display_settings['ind_sample_time_first_arrival'])
         self.canvas_render()
-        
+
 
     def _show_context_menu(self, position) -> None:
         """Show context menu on right-click."""
@@ -1330,10 +1347,6 @@ class SeismicSubWindow(UASSubWindow):
         self._apply_image_four_axes_tick_settings()
 
 
-    def render_four_axes(self) -> None:
-        """Render the four axes (top, bottom, left, right) around the image."""
-        self._canvas.draw()
-
     def _update_file_name_in_plot(self, set_value: bool|None) -> None:
         if set_value is not None:
             self._display_settings['file_name_in_plot'] = set_value
@@ -1401,6 +1414,8 @@ class SeismicSubWindow(UASSubWindow):
             ax2.set_visible(True)
             ax2.tick_params(axis='y', right=True, labelright=True)
             self._apply_single_axis_tick_settings(ax2.yaxis, right, self._display_settings['right_major_tick'], self._display_settings['right_minor_ticks'])
+        # render four axes
+        self._canvas.draw_idle()
 
 
     def _check_colorbar_ax_visibility(self) -> bool:
