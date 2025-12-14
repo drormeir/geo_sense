@@ -440,6 +440,9 @@ class SeismicSubWindow(UASSubWindow):
         # Hide coordinate display in toolbar
         self._nav_toolbar.set_message = lambda x: None
 
+        # Replace "Configure subplots" action with Display Settings
+        self._replace_configure_subplots_action()
+
         # Create custom toolbar for zoom toggle
         self._toolbar = QToolBar("Seismic Toolbar", self)
         self._setup_toolbar()
@@ -1292,6 +1295,27 @@ class SeismicSubWindow(UASSubWindow):
         """Handle window close event - unregister from global settings."""
         GlobalSettings.remove_listener(self._on_global_settings_changed)
         super().closeEvent(event)
+
+
+    def _replace_configure_subplots_action(self) -> None:
+        """Replace the 'Configure subplots' toolbar button with Display Settings."""
+        # Find the configure subplots action in the NavigationToolbar
+        for action in self._nav_toolbar.actions():
+            # The configure subplots action typically has "Subplots" or "Configure" in its text
+            # or uses the configure_subplots method
+            if action.text() == "Configure subplots" or "Subplots" in action.text():
+                # Disconnect the default action
+                try:
+                    action.triggered.disconnect()
+                except:
+                    pass  # In case it's not connected
+
+                # Connect to our Display Settings dialog
+                action.triggered.connect(self._show_display_settings)
+
+                # Change the tooltip
+                action.setToolTip("Display Settings")
+                break
 
 
     def _show_display_settings(self) -> None:
