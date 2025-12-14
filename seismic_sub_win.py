@@ -294,14 +294,13 @@ class DisplaySettingsDialog(QDialog):
         self._parent._canvas.draw_idle()
 
     def _on_depth_conversion_settings_changed(self):
-        self._old_settings['ind_sample_time_first_arrival'] = self.ind_sample_time_first_arrival_spinbox.value()
-        self._parent._display_settings['ind_sample_time_first_arrival'] = self.ind_sample_time_first_arrival_spinbox.value()
         for key, spinbox in self.velocity_spinboxes.items():
             self._old_settings[key] = spinbox.value() * 1e9 # convert from meter per nanosecond to meters per second
             self._parent._display_settings[key] = spinbox.value() * 1e9 # convert from meter per nanosecond to meters per second
-        self._parent._calculate_depth_converted()
+        self._parent._update_first_arrival_sample(self.ind_sample_time_first_arrival_spinbox.value())            
+        self._old_settings['ind_sample_time_first_arrival'] = self._parent._display_settings['ind_sample_time_first_arrival'] # updated value
         self._parent._apply_image_four_axes_tick_settings()
-        self._parent._canvas.draw_idle()
+        self._parent.render_four_axes()
 
 
     def _on_image_four_axes_settings_changed(self):
@@ -312,7 +311,7 @@ class DisplaySettingsDialog(QDialog):
         # Update parent's settings
         self._parent._display_settings = new_settings
         self._parent._apply_image_four_axes_tick_settings()
-        self._parent._canvas.draw_idle()
+        self._parent.render_four_axes()
 
     def reject(self):
         """Restore old settings when dialog is cancelled."""
@@ -864,6 +863,7 @@ class SeismicSubWindow(UASSubWindow):
     def deserialize(self, state: dict[str, Any]) -> None:
         """Restore subwindow state including loaded file and color scale."""
         super().deserialize(state)
+        self.load_file(state.get("filename", ""))
         if 'display_settings' in state:
             settings = state['display_settings']
             # Convert string values back to AxisType enums
@@ -876,8 +876,9 @@ class SeismicSubWindow(UASSubWindow):
                 except ValueError:
                     settings[key] = DisplaySettingsDialog.default_settings[key]
             self._display_settings = settings
-        self.load_file(state.get("filename", ""))
-
+        self._update_first_arrival_sample(self._display_settings['ind_sample_time_first_arrival'])
+        self.canvas_render()
+        
 
     def _show_context_menu(self, position) -> None:
         """Show context menu on right-click."""
@@ -985,19 +986,8 @@ class SeismicSubWindow(UASSubWindow):
         self._amplitude_min = float(np.min(self._data))
         self._amplitude_max = float(np.max(self._data))
         # Calculate time range in seconds
-        nt, nx = self._data.shape
-        assert self._trace_time_delays_seconds is not None
-        assert len(self._trace_time_delays_seconds) == nx
-        self._time_first_arrival_seconds = np.median(self._trace_time_delays_seconds)
+        nt = self._data.shape[0]
         time_range_seconds = (nt - 1) * self._time_interval_seconds
-        if self._time_first_arrival_seconds < self._time_interval_seconds or self._time_first_arrival_seconds >= time_range_seconds - self._time_interval_seconds:
-            # default to 10% of the data range
-            self._time_first_arrival_seconds = time_range_seconds * 0.1
-        self._time_samples_seconds = np.arange(nt) * self._time_interval_seconds - self._time_first_arrival_seconds
-        ind_sample_time_first_arrival = int(self._time_first_arrival_seconds / self._time_interval_seconds)
-        while ind_sample_time_first_arrival < self._time_samples_seconds.shape[0] and self._time_samples_seconds[ind_sample_time_first_arrival] < 0:
-            ind_sample_time_first_arrival += 1
-        self._display_settings['ind_sample_time_first_arrival'] = ind_sample_time_first_arrival
         if time_range_seconds < 0.01:
             # display time in nano seconds
             self._time_display_units = "ns"
@@ -1011,14 +1001,19 @@ class SeismicSubWindow(UASSubWindow):
             self._time_display_units = "s"
             self._time_display_value_factor = 1.0
 
+        self._trace_time_first_arrival_seconds = np.median(self._trace_time_delays_seconds)
+
+        if self._trace_time_first_arrival_seconds < self._time_interval_seconds or self._trace_time_first_arrival_seconds >= time_range_seconds - self._time_interval_seconds:
+            # default to 10% of the data range
+            self._trace_time_first_arrival_seconds = time_range_seconds * 0.1
+
+        self._update_first_arrival_sample(int(self._trace_time_first_arrival_seconds / self._time_interval_seconds))
+
         # Calculate cumulative distances along the survey line
         # Distance from trace i-1 to trace i for each trace
         trace_distances_meters = np.sqrt(np.sum(np.diff(self._trace_coords_meters, axis=0)**2, axis=1))
         # Cumulative sum with 0.0 prepended for first trace
         self._trace_cumulative_distances_meters = np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
-        assert len(self._trace_cumulative_distances_meters) == len(self._trace_coords_meters)
-
-        self._calculate_depth_converted()
 
         self.canvas_render()
         return ret
@@ -1324,10 +1319,6 @@ class SeismicSubWindow(UASSubWindow):
         """Apply the display settings to the image_ax."""
         if self._data is None:
             return
-        # recalculate time samples seconds
-        ind_sample_time_first_arrival = self._display_settings['ind_sample_time_first_arrival']
-        self._time_samples_seconds = np.arange(-ind_sample_time_first_arrival,self._data.shape[0]-ind_sample_time_first_arrival) * self._time_interval_seconds
-        self._calculate_depth_converted()
         colormap = self._display_settings['colormap']
         flip_colormap = self._display_settings['flip_colormap']
         # Add '_r' suffix to flip the colormap
@@ -1338,6 +1329,10 @@ class SeismicSubWindow(UASSubWindow):
         self._update_file_name_in_plot(None)
         self._apply_image_four_axes_tick_settings()
 
+
+    def render_four_axes(self) -> None:
+        """Render the four axes (top, bottom, left, right) around the image."""
+        self._canvas.draw()
 
     def _update_file_name_in_plot(self, set_value: bool|None) -> None:
         if set_value is not None:
@@ -1580,6 +1575,16 @@ class SeismicSubWindow(UASSubWindow):
         axis.set_ticks(minor_tick_positions, minor=True)
 
 
+    def _update_first_arrival_sample(self, ind_sample_time_first_arrival: int) -> int:
+        nt = self._data.shape[0]
+        ind_sample_time_first_arrival = max(0,min(ind_sample_time_first_arrival, nt - 1))
+        self._time_first_arrival_seconds = ind_sample_time_first_arrival * self._time_interval_seconds
+        self._display_settings['ind_sample_time_first_arrival'] = ind_sample_time_first_arrival
+        self._time_samples_seconds = np.arange(nt) * self._time_interval_seconds - self._time_first_arrival_seconds
+        self._calculate_depth_converted()
+        return ind_sample_time_first_arrival
+        
+
     def _calculate_depth_converted(self) -> None:
         """
         Calculate depth for bistatic GPR using geometric correction.
@@ -1591,14 +1596,13 @@ class SeismicSubWindow(UASSubWindow):
         - Two-way time: t = 2L/v
         - Solving for depth: d = sqrt((v*t/2)² - (offset/2)²)
         """
-        if self._time_samples_seconds is None:
-            return
+        assert self._time_samples_seconds is not None
         air_velocity_m_per_s = min(self._display_settings['air_velocity_m_per_s'], C_VACUUM)
         ground_velocity_m_per_s = min(self._display_settings['ground_velocity_m_per_s'], C_VACUUM)
+        ind_sample_time_first_arrival = min(self._display_settings['ind_sample_time_first_arrival'], len(self._time_samples_seconds) - 1)
         n_time_samples = len(self._time_samples_seconds)
         critical_time = self._offset_meters / ground_velocity_m_per_s
         half_offset = 0.5 * self._offset_meters
-        ind_sample_time_first_arrival = self._display_settings['ind_sample_time_first_arrival']
         self._depth_converted = np.empty_like(self._time_samples_seconds)
         ind_sample_critical_time = ind_sample_time_first_arrival
         while ind_sample_critical_time < n_time_samples and self._time_samples_seconds[ind_sample_critical_time] < critical_time:
