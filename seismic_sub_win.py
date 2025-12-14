@@ -415,19 +415,11 @@ class SeismicSubWindow(UASSubWindow):
         self._offset_meters: float = 0.0
         self._depth_converted: np.ndarray | None = None
 
-        # Zoom state
-        self._zoom_active: bool = False
-        self._zoom_id: int | None = None
-        self._press_event = None
-        self._sticky_vertical_edges: bool = False
-        self._sticky_horizontal_edges: bool = False
+        # Home button mode: "fit" = fit to window, "1:1" = 1:1 pixels
+        self._home_mode: str = "fit"
 
         # Display settings
         self._display_settings: dict[str, Any] = dict(DisplaySettingsDialog.default_settings)
-
-        # Create shared zoom menu
-        self._zoom_menu = None
-        self._create_zoom_menu()
 
         self.title = "Seismic View"
         self._fig = Figure(figsize=(10, 6))
@@ -443,14 +435,16 @@ class SeismicSubWindow(UASSubWindow):
         # Replace "Configure subplots" action with Display Settings
         self._replace_configure_subplots_action()
 
-        # Create custom toolbar for zoom toggle
-        self._toolbar = QToolBar("Seismic Toolbar", self)
-        self._setup_toolbar()
+        # Replace "Home" action with custom behavior
+        self._replace_home_action()
+
+        # Add context menu to NavigationToolbar
+        self._nav_toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._nav_toolbar.customContextMenuRequested.connect(self._show_nav_toolbar_context_menu)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        layout.addWidget(self._toolbar)
         layout.addWidget(self._nav_toolbar)
         layout.addWidget(self._canvas)
 
@@ -463,6 +457,9 @@ class SeismicSubWindow(UASSubWindow):
         # Connect canvas hover events to propagate to main window
         self._canvas.mpl_connect("axes_leave_event", self._axes_leave_event)
         self._canvas.mpl_connect("motion_notify_event", self._motion_notify_event)
+
+        # Connect scroll event for mouse wheel zoom
+        self._canvas.mpl_connect("scroll_event", self._on_scroll_zoom)
 
         # Set custom window icon
         self.setWindowIcon(create_gs_icon())
@@ -550,171 +547,157 @@ class SeismicSubWindow(UASSubWindow):
         self._canvas.draw()
 
 
-    def _setup_toolbar(self) -> None:
-        """Set up the toolbar with zoom toggle button."""
-        self._zoom_action = QAction("🔍 Zoom", self)
-        self._zoom_action.setCheckable(True)
-        self._zoom_action.setChecked(False)
-        self._zoom_action.setToolTip("Toggle zoom mode (Left-click drag to zoom in, Right-click to zoom out)")
-        self._zoom_action.toggled.connect(self._toggle_zoom)
-        self._toolbar.addAction(self._zoom_action)
+    def _show_nav_toolbar_context_menu(self, position) -> None:
+        """Show context menu for NavigationToolbar (only for specific buttons)."""
+        # Find which action is under the cursor
+        action_at_cursor = self._nav_toolbar.actionAt(position)
 
-        # Make toolbar visible and set proper size
-        self._toolbar.setVisible(True)
-        self._toolbar.setMovable(False)
+        if action_at_cursor is None:
+            return  # No action under cursor, don't show menu
 
-        # Style the toolbar to make checked state more visible
-        self._toolbar.setStyleSheet("""
-            QToolBar QToolButton:checked {
-                border: 2px solid #0078d4;
-                background-color: transparent;
-            }
-        """)
+        # Get the action's text or tooltip to identify it
+        action_text = action_at_cursor.text()
+        action_tooltip = action_at_cursor.toolTip()
 
-        # Install event filter to catch right-clicks on toolbar
-        self._toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
-        self._toolbar.customContextMenuRequested.connect(self._show_zoom_context_menu)
+        # Only show context menu for specific toolbar buttons
+        allowed_buttons = ["Home", "Back", "Forward", "Pan", "Zoom"]
 
+        # Check if this action is one of the allowed buttons
+        is_allowed = False
+        for button_name in allowed_buttons:
+            if button_name in action_text or button_name in action_tooltip:
+                is_allowed = True
+                break
 
-    def _create_zoom_menu(self) -> None:
-        """Create the shared zoom submenu."""
-        self._zoom_menu = QMenu("Zoom", self)
+        if not is_allowed:
+            return  # Not an allowed button, don't show menu
 
-        reset_zoom_action = QAction("Reset Zoom", self)
-        reset_zoom_action.triggered.connect(self._zoom_out)
-        self._zoom_menu.addAction(reset_zoom_action)
-
-        # Add separator
-        self._zoom_menu.addSeparator()
-
-        # Sticky Vertical Edges (checkable)
-        self._sticky_vertical_action = QAction("Sticky Vertical Edges", self)
-        self._sticky_vertical_action.setCheckable(True)
-        self._sticky_vertical_action.setChecked(self._sticky_vertical_edges)
-        self._sticky_vertical_action.toggled.connect(self._toggle_sticky_vertical)
-        self._zoom_menu.addAction(self._sticky_vertical_action)
-
-        # Sticky Horizontal Edges (checkable)
-        self._sticky_horizontal_action = QAction("Sticky Horizontal Edges", self)
-        self._sticky_horizontal_action.setCheckable(True)
-        self._sticky_horizontal_action.setChecked(self._sticky_horizontal_edges)
-        self._sticky_horizontal_action.toggled.connect(self._toggle_sticky_horizontal)
-        self._zoom_menu.addAction(self._sticky_horizontal_action)
-
-
-    def _show_zoom_context_menu(self, position) -> None:
-        """Show context menu for zoom tool with reset option."""
+        # Show the context menu
         context_menu = QMenu(self)
 
-        # Add shared zoom submenu
-        context_menu.addMenu(self._zoom_menu)
+        # Home button behavior submenu
+        home_menu = QMenu("Home Button Behavior", self)
+
+        # Fit to Window option
+        fit_to_window_action = QAction("Fit to Window", self)
+        fit_to_window_action.setCheckable(True)
+        fit_to_window_action.setChecked(self._home_mode == "fit")
+        fit_to_window_action.triggered.connect(lambda: self._set_home_mode("fit"))
+        home_menu.addAction(fit_to_window_action)
+
+        # 1:1 Pixels option
+        one_to_one_action = QAction("1:1 Pixels", self)
+        one_to_one_action.setCheckable(True)
+        one_to_one_action.setChecked(self._home_mode == "1:1")
+        one_to_one_action.triggered.connect(lambda: self._set_home_mode("1:1"))
+        home_menu.addAction(one_to_one_action)
+
+        context_menu.addMenu(home_menu)
 
         # Show menu at cursor position
-        context_menu.exec(self._toolbar.mapToGlobal(position))
+        context_menu.exec(self._nav_toolbar.mapToGlobal(position))
 
 
-    def _toggle_zoom(self, checked: bool) -> None:
-        """Toggle zoom mode on/off."""
-        self._zoom_active = checked
-        if checked:
-            # Activate zoom mode
-            self._activate_zoom()
-        else:
-            # Deactivate zoom mode
-            self._deactivate_zoom()
+    def _set_home_mode(self, mode: str) -> None:
+        """Set the home button behavior mode."""
+        self._home_mode = mode
 
 
-    def _activate_zoom(self) -> None:
-        """Activate zoom mode by connecting mouse events."""
-        self._zoom_id = self._canvas.mpl_connect('button_press_event', self._on_zoom_press)
-        self._canvas.setCursor(Qt.CrossCursor)
+    def _home_fit_to_window(self) -> None:
+        """Reset view to show entire image fitted to window."""
+        if self._data is None or self._image_ax is None:
+            return
+
+        # Set limits to show full data range
+        self._image_ax.set_xlim(-0.5, self._data.shape[1] - 0.5)
+        self._image_ax.set_ylim(self._data.shape[0] - 0.5, -0.5)  # Inverted for image coordinates
+
+        # Update the canvas
+        self._canvas.draw_idle()
 
 
-    def _deactivate_zoom(self) -> None:
-        """Deactivate zoom mode by disconnecting mouse events."""
-        if self._zoom_id is not None:
-            self._canvas.mpl_disconnect(self._zoom_id)
-            self._zoom_id = None
-        self._canvas.unsetCursor()
+    def _home_one_to_one_pixels(self) -> None:
+        """Reset view to 1:1 pixel ratio (actual size), showing only part of image if needed."""
+        if self._data is None or self._image_ax is None:
+            return
+
+        # Get the current canvas size in pixels
+        bbox = self._image_ax.get_window_extent()
+        canvas_width_px = bbox.width
+        canvas_height_px = bbox.height
+
+        # Calculate how many data pixels can fit in the canvas at 1:1 ratio
+        # At 1:1, one data pixel = one screen pixel
+        data_width = self._data.shape[1]
+        data_height = self._data.shape[0]
+
+        # Center the view on the middle of the data
+        center_x = data_width / 2.0
+        center_y = data_height / 2.0
+
+        # Calculate visible range (half on each side of center)
+        half_width = canvas_width_px / 2.0
+        half_height = canvas_height_px / 2.0
+
+        # Set limits to show 1:1 pixels, centered
+        # Note: -0.5 offset because imshow centers pixels at integer coordinates
+        self._image_ax.set_xlim(center_x - half_width - 0.5, center_x + half_width - 0.5)
+        self._image_ax.set_ylim(center_y + half_height - 0.5, center_y - half_height - 0.5)  # Inverted
+
+        # Update the canvas
+        self._canvas.draw_idle()
 
 
-    def _on_zoom_press(self, event) -> None:
-        """Handle mouse press for zoom rectangle selection."""
+    def _custom_home(self) -> None:
+        """Custom home button handler that uses the selected mode."""
+        if self._home_mode == "fit":
+            self._home_fit_to_window()
+        elif self._home_mode == "1:1":
+            self._home_one_to_one_pixels()
+
+
+    def _on_scroll_zoom(self, event) -> None:
+        """Handle mouse wheel scroll for zooming (like Google Maps)."""
         if event.inaxes != self._image_ax:
+            return  # Only zoom when over the image axes
+
+        if self._data is None:
             return
 
-        # Only handle left click for zoom
-        if event.button == 1:  # Left click - start zoom rectangle
-            self._press_event = event
-            self._release_id = self._canvas.mpl_connect('button_release_event', self._on_zoom_release)
-            self._motion_id = self._canvas.mpl_connect('motion_notify_event', self._on_zoom_motion)
-            self._rect = None
+        # Zoom factor: scroll up = zoom in, scroll down = zoom out
+        zoom_factor = 1.2 if event.button == 'up' else 1/1.2
 
+        # Get current axis limits
+        cur_xlim = self._image_ax.get_xlim()
+        cur_ylim = self._image_ax.get_ylim()
 
-    def _on_zoom_motion(self, event) -> None:
-        """Draw zoom rectangle during mouse drag."""
-        if self._press_event is None:
-            return
+        # Get mouse position in data coordinates
+        xdata = event.xdata
+        ydata = event.ydata
 
-        # Allow dragging outside axes but use last valid coordinates
-        if event.xdata is None or event.ydata is None:
-            return
+        # Calculate current range
+        cur_xrange = cur_xlim[1] - cur_xlim[0]
+        cur_yrange = cur_ylim[1] - cur_ylim[0]
 
-        # Remove old rectangle
-        if hasattr(self, '_rect') and self._rect is not None:
-            self._rect.remove()
+        # Calculate new range (smaller range = more zoomed in)
+        new_xrange = cur_xrange / zoom_factor
+        new_yrange = cur_yrange / zoom_factor
 
-        # Draw new rectangle from corner to corner
-        x0, y0 = self._press_event.xdata, self._press_event.ydata
-        x1, y1 = event.xdata, event.ydata
+        # Calculate what fraction of the current range the mouse is at
+        # This keeps the point under the cursor fixed
+        rel_x = (xdata - cur_xlim[0]) / cur_xrange
+        rel_y = (ydata - cur_ylim[0]) / cur_yrange
 
-        # Rectangle spans from one corner to opposite corner
-        self._rect = self._image_ax.add_patch(
-            plt.Rectangle((min(x0, x1), min(y0, y1)),
-                         abs(x1 - x0), abs(y1 - y0),
-                         fill=False, edgecolor='red', linewidth=2, linestyle='--')
-        )
+        # Calculate new limits centered on the mouse position
+        new_xlim = [xdata - new_xrange * rel_x, xdata + new_xrange * (1 - rel_x)]
+        new_ylim = [ydata - new_yrange * rel_y, ydata + new_yrange * (1 - rel_y)]
+
+        # Apply new limits
+        self._image_ax.set_xlim(new_xlim)
+        self._image_ax.set_ylim(new_ylim)
+
+        # Update canvas
         self._canvas.draw_idle()
-
-
-    def _on_zoom_release(self, event) -> None:
-        """Complete zoom rectangle selection and apply zoom."""
-        if self._press_event is None:
-            return
-
-        # Disconnect motion and release events
-        self._canvas.mpl_disconnect(self._release_id)
-        self._canvas.mpl_disconnect(self._motion_id)
-
-        # Get coordinates (use last valid position if released outside axes)
-        x0, y0 = self._press_event.xdata, self._press_event.ydata
-
-        # If released outside axes, use the rectangle's last position
-        if event.xdata is not None and event.ydata is not None:
-            x1, y1 = event.xdata, event.ydata
-        elif hasattr(self, '_rect') and self._rect is not None:
-            # Use last rectangle position
-            bbox = self._rect.get_bbox()
-            x1, y1 = bbox.x1, bbox.y1
-        else:
-            x1, y1 = x0, y0
-
-        # Remove rectangle - it disappears on mouse release
-        if hasattr(self, '_rect') and self._rect is not None:
-            self._rect.remove()
-            self._rect = None
-            self._canvas.draw_idle()
-
-        # Apply zoom if rectangle is large enough (at least a few pixels)
-        x_mid = int(round((x0 + x1) / 2))
-        y_mid = int(round((y0 + y1) / 2))
-        dx = max(5, int(round(abs(x1 - x0)/2))) + 0.5
-        dy = max(5, int(round(abs(y1 - y0)/2))) + 0.5
-        self._image_ax.set_xlim(max(x_mid - dx, -0.5), min(x_mid + dx, self._data.shape[1] - 0.5))
-        self._image_ax.set_ylim(min(y_mid + dy, self._data.shape[0] - 0.5), max(y_mid - dy, -0.5))  # Inverted for image coordinates
-        self._canvas.draw_idle()
-
-        self._press_event = None
 
 
     def _zoom_out(self) -> None:
@@ -723,16 +706,6 @@ class SeismicSubWindow(UASSubWindow):
             self._image_ax.set_xlim(-0.5, self._data.shape[1] - 0.5)
             self._image_ax.set_ylim(self._data.shape[0] - 0.5, -0.5)  # Inverted for image coordinates
             self._canvas.draw_idle()
-
-
-    def _toggle_sticky_vertical(self, checked: bool) -> None:
-        """Toggle sticky vertical edges mode."""
-        self._sticky_vertical_edges = checked
-
-
-    def _toggle_sticky_horizontal(self, checked: bool) -> None:
-        """Toggle sticky horizontal edges mode."""
-        self._sticky_horizontal_edges = checked
 
 
     @staticmethod
@@ -930,9 +903,6 @@ class SeismicSubWindow(UASSubWindow):
         display_settings_action = QAction("Display Settings...", self)
         display_settings_action.triggered.connect(self._show_display_settings)
         context_menu.addAction(display_settings_action)
-
-        # Add shared zoom submenu
-        context_menu.addMenu(self._zoom_menu)
 
         # Show menu at cursor position
         context_menu.exec(self.mapToGlobal(position))
@@ -1315,6 +1285,23 @@ class SeismicSubWindow(UASSubWindow):
 
                 # Change the tooltip
                 action.setToolTip("Display Settings")
+                break
+
+
+    def _replace_home_action(self) -> None:
+        """Replace the 'Home' toolbar button with custom home behavior."""
+        # Find the home action in the NavigationToolbar
+        for action in self._nav_toolbar.actions():
+            # The home action typically has "Home" in its text or tooltip
+            if action.text() == "Home" or "Home" in action.toolTip():
+                # Disconnect the default action
+                try:
+                    action.triggered.disconnect()
+                except:
+                    pass  # In case it's not connected
+
+                # Connect to our custom home handler
+                action.triggered.connect(self._custom_home)
                 break
 
 
