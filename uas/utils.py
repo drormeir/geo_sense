@@ -24,19 +24,25 @@ def format_value(value: float|int, decimals_digits: int=3, min_decimal_digits: i
     return ret
 
 
-def simple_interpolation(vec: np.ndarray|None, x: float|None) -> float|None:
-    if vec is None or vec.size == 0 or x is None:
+def simple_interpolation(vec: np.ndarray|None, float_index: float|None) -> float|None:
+    """
+    Simple interpolation of a vector at a given float index.
+    """
+    if vec is None or vec.size == 0 or float_index is None:
         return None
-    if x <= 0:
+    if float_index <= 0:
         return vec[0]
-    if x >= vec.size - 1:
+    if float_index >= vec.size - 1:
         return vec[-1]
-    ix = int(x)
-    dx = x - ix
-    return vec[ix] * (1-dx) + vec[ix+1] * dx
+    index = int(float_index) # integer index
+    delta = float_index - index
+    return vec[index] * (1-delta) + vec[index+1] * delta
 
 
 def interpolate_inplace_nan_values(vec: np.ndarray) -> None:
+    """
+    Interpolate in place the nan values of a vector.
+    """
     assert vec.ndim == 1 or vec.ndim == 2
     is_nan = np.isnan(vec)
     if vec.ndim == 2:
