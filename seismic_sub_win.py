@@ -987,7 +987,7 @@ class SeismicSubWindow(UASSubWindow):
         # Calculate time range in seconds
         nt, nx = self._data.shape
         assert self._trace_time_delays_seconds is not None
-        assert len(self._trace_time_delays_seconds) == nt
+        assert len(self._trace_time_delays_seconds) == nx
         self._time_first_arrival_seconds = np.median(self._trace_time_delays_seconds)
         time_range_seconds = (nt - 1) * self._time_interval_seconds
         if self._time_first_arrival_seconds < self._time_interval_seconds or self._time_first_arrival_seconds >= time_range_seconds - self._time_interval_seconds:
@@ -1353,6 +1353,14 @@ class SeismicSubWindow(UASSubWindow):
 
     def _apply_image_four_axes_tick_settings(self) -> None:
         """Apply tick settings and labels to all four axes surrounding the image."""
+
+        # Clear all secondary axes to avoid stacking
+        # Note: Only secondary axes (top/right) need clearing, not primary axes (bottom/left).
+        # Primary axes (xaxis/yaxis) are single objects that get updated in place.
+        # Secondary axes are created by secondary_xaxis()/secondary_yaxis() calls,
+        # which create NEW axes objects each time, so old ones must be removed first.
+        for child_ax in self._image_ax.child_axes[:]:  # [:] creates copy while iterating
+            child_ax.remove()
 
         # Get current settings
         top = self._display_settings['top']
