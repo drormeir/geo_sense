@@ -1,7 +1,9 @@
+from matplotlib.transforms import Bbox
 import numpy as np
 import os
 from typing import Any
 from enum import Enum
+import cv2
 
 from PySide6.QtWidgets import (
     QMessageBox,
@@ -61,6 +63,9 @@ axis_type_to_label: dict[AxisType, str] = {
     AxisType.DISTANCE: "Distance",
     AxisType.TRACE: "Trace Number",
 }
+
+vertical_axis_types: list[AxisType] = [AxisType.DEPTH, AxisType.SAMPLE, AxisType.TIME]
+horizontal_axis_types: list[AxisType] = [AxisType.DISTANCE, AxisType.TRACE]
 
 # Speed of light (for GPR/electromagnetic waves)
 C_VACUUM = 299_792_458.0  # m/s
@@ -311,13 +316,18 @@ class DisplaySettingsDialog(QDialog):
         self._parent._update_file_name_in_plot(self.file_name_in_plot_checkbox.isChecked())
         self._parent._canvas.draw_idle()
 
+
     def _on_depth_conversion_settings_changed(self):
         for key, spinbox in self.velocity_spinboxes.items():
             self._old_settings[key] = spinbox.value() * 1e9 # convert from meter per nanosecond to meters per second
             self._parent._display_settings[key] = spinbox.value() * 1e9 # convert from meter per nanosecond to meters per second
-        self._parent._update_first_arrival_sample(self.ind_sample_time_first_arrival_spinbox.value())            
-        self._old_settings['ind_sample_time_first_arrival'] = self._parent._display_settings['ind_sample_time_first_arrival'] # updated value
-        self._parent._apply_image_four_axes_tick_settings()
+
+        gui_requested_first_arrival_sample = self.ind_sample_time_first_arrival_spinbox.value()
+        result_first_arrival_sample = self._parent._on_change_first_arrival_sample(gui_requested_first_arrival_sample)
+        self._old_settings['ind_sample_time_first_arrival'] = result_first_arrival_sample
+        self.ind_sample_time_first_arrival_spinbox.blockSignals(True)
+        self.ind_sample_time_first_arrival_spinbox.setValue(result_first_arrival_sample)
+        self.ind_sample_time_first_arrival_spinbox.blockSignals(False)
 
 
     def _on_image_four_axes_settings_changed(self):
@@ -328,6 +338,7 @@ class DisplaySettingsDialog(QDialog):
         # Update parent's settings
         self._parent._display_settings = new_settings
         self._parent._apply_image_four_axes_tick_settings()
+        self._parent._canvas.draw_idle()
 
 
     def reject(self):
@@ -335,6 +346,7 @@ class DisplaySettingsDialog(QDialog):
         self._parent._display_settings = self._old_settings
         self._parent.canvas_render()
         super().reject()
+
 
     def get_settings_from_layout(self):
         """Return the selected settings as a dictionary."""
@@ -389,8 +401,12 @@ class SeismicSubWindow(UASSubWindow):
         # Call parent init (will call empty on_create)
         super().__init__(main_window, parent)
 
-        self._data: np.ndarray | None = None
         self._filename: str = ""
+        self._file_raw_data: np.ndarray | None = None
+        self._file_view_region: Bbox | None = None
+        self._file_region_clipped: Bbox | None = None
+        self._canvas_render_region: Bbox | None = None
+        self._canvas_buffer: np.ndarray | None = None
         self._amplitude_min: float = 0.0
         self._amplitude_max: float = 0.0
         self._colorbar: plt.Colorbar | None = None
@@ -404,17 +420,21 @@ class SeismicSubWindow(UASSubWindow):
         # trace distances data in meters
         self._trace_coords_meters: np.ndarray | None = None
         self._trace_cumulative_distances_meters: np.ndarray | None = None
+        self._trace_cumulative_distances_display: np.ndarray | None = None
 
         # time samples data in seconds
         self._time_interval_seconds: float = 1.0
         self._time_first_arrival_seconds: float = 0.0
         self._trace_time_delays_seconds: np.ndarray | None = None # time delays in seconds for each trace
         self._time_samples_seconds: np.ndarray | None = None
+        self._time_samples_display: np.ndarray | None = None
         self._time_display_units: str = "s"
         self._time_display_value_factor: float = 1.0 # for display time in nano seconds, milliseconds, seconds
         self._offset_meters: float = 0.0
         self._depth_converted: np.ndarray | None = None
-
+        self._depth_converted_display: np.ndarray | None = None
+        self._horizontal_indices_in_data_region: np.ndarray | None = None
+        self._vertical_indices_in_data_region: np.ndarray | None = None
         # Home button mode: "fit" = fit to window, "1:1" = 1:1 pixels
         self._home_mode: str = "fit"
 
@@ -487,28 +507,46 @@ class SeismicSubWindow(UASSubWindow):
             return GlobalSettings.display_length_unit
         return ""
 
-    def _get_axis_geometry_4_display(self, axis_type: AxisType) -> tuple:
-        nz, nx = self._data.shape
-        if axis_type == AxisType.TIME:
-            dt = self._time_interval_seconds*self._time_display_value_factor
-            time_min = self._time_samples_seconds[0]*self._time_display_value_factor
-            return (time_min, dt, nz)
-        if axis_type == AxisType.DISTANCE: # distance between traces
-            dx = self._trace_cumulative_distances_meters[-1] / (nx - 1) * GlobalSettings.display_length_factor
-            distance_min = 0.0
-            return (distance_min, dx, nx)
-        if axis_type == AxisType.DEPTH: # time converted to depth
-            z_min = self._depth_converted[0] * GlobalSettings.display_length_factor
-            z_max = self._depth_converted[-1] * GlobalSettings.display_length_factor
-            dz = (z_max - z_min) / (nz - 1)
-            return (z_min, dz, nz)
+
+    def _get_axis_values_for_display(self, axis_type: AxisType) -> tuple[np.ndarray, np.ndarray] | None:
+        if self._canvas_render_region is None:
+            return None
+        if axis_type in vertical_axis_types:
+            samples = np.arange(self._canvas_render_region.y0, self._canvas_render_region.y1, dtype=int)
+        elif axis_type in horizontal_axis_types:
+            samples = np.arange(self._canvas_render_region.x0, self._canvas_render_region.x1, dtype=int)
+        else:
+            return None
+        if axis_type == AxisType.DEPTH:
+            if self._depth_converted_display is None:
+                return None
+            return samples, self._depth_converted_display
+        if axis_type == AxisType.DISTANCE:
+            if self._trace_cumulative_distances_display is None:
+                return None
+            return samples, self._trace_cumulative_distances_display
+        if axis_type == AxisType.TIME:  
+            if self._time_samples_display is None:
+                return None
+            return samples, self._time_samples_display
         if axis_type == AxisType.SAMPLE:
-            sample_min = 0.0
-            return (sample_min, 1, nz)
+            if self._vertical_indices_in_data_region is None:
+                return None
+            return samples, self._vertical_indices_in_data_region
         if axis_type == AxisType.TRACE:
-            trace_min = 0.0
-            return (trace_min, 1, nx)
-        return (0, 1, 0)
+            if self._horizontal_indices_in_data_region is None:
+                return None
+            return samples, self._horizontal_indices_in_data_region
+        return None
+    
+
+    def _get_unit_factor_for_display(self, axis_type: AxisType) -> float:
+        if axis_type == AxisType.TIME:
+            return self._time_display_value_factor
+        if axis_type in [AxisType.DEPTH, AxisType.DISTANCE]:
+            return GlobalSettings.display_length_factor
+        return 1.0
+
 
     def _show_error(self, title: str, message: str) -> None:
         """Show error message by rendering it on the matplotlib canvas.
@@ -609,57 +647,68 @@ class SeismicSubWindow(UASSubWindow):
         self._home_mode = mode
 
 
-    def _home_fit_to_window(self) -> None:
+    def _home(self) -> None:
+        self._set_view_file_region_by_mode()
+        self._set_canvas_to_image()
+
+
+    def _set_canvas_to_image(self) -> None:
+        """Set the canvas to the image."""
+        if self._image is None or self._canvas_buffer is None:
+            return
+        self._image.set_data(self._canvas_buffer)
+        self._apply_image_four_axes_tick_settings()
+        self._canvas.draw() # force draw
+
+
+    def _set_view_file_region_by_mode(self) -> None:
+        """Set the view file region by mode."""
+        if self._home_mode == "fit":
+            self._file_view_region_fit_to_window()
+        elif self._home_mode == "1:1":
+            self._file_view_region_one_to_one_pixels()
+        self._resample_axis_values_4_display()
+
+
+    def _file_view_region_fit_to_window(self) -> None:
         """Reset view to show entire image fitted to window."""
-        if self._data is None or self._image_ax is None:
+        if self._file_raw_data is None or self._image_ax is None:
             return
+        nz, nx = self._file_raw_data.shape
+        pixels_shape = self._get_pixels_shape()
+        self._file_view_region = Bbox([[0, 0], [nx, nz]])
+        self._file_region_clipped = Bbox(self._file_view_region)
+        self._canvas_render_region = Bbox([[0, 0], [pixels_shape[1], pixels_shape[0]]])
+        self._canvas_buffer = np.empty(shape=pixels_shape, dtype=self._file_raw_data.dtype)
+        # without crop. only resize to allocated buffer.
+        # dsize is (width, height), opposite of numpy shape (height, width)
+        cv2.resize(self._file_raw_data, dsize=(pixels_shape[1], pixels_shape[0]), interpolation=cv2.INTER_LINEAR, dst=self._canvas_buffer)
 
-        # Set limits to show full data range
-        self._image_ax.set_xlim(-0.5, self._data.shape[1] - 0.5)
-        self._image_ax.set_ylim(self._data.shape[0] - 0.5, -0.5)  # Inverted for image coordinates
 
-        # Update the canvas
-        self._canvas.draw_idle()
-
-
-    def _home_one_to_one_pixels(self) -> None:
+    def _file_view_region_one_to_one_pixels(self) -> None:
         """Reset view to 1:1 pixel ratio (actual size), showing only part of image if needed."""
-        if self._data is None or self._image_ax is None:
+        if self._file_raw_data is None or self._image_ax is None:
             return
-
-        # Get the current canvas size in pixels
-        bbox = self._image_ax.get_window_extent()
-        canvas_width_px = bbox.width
-        canvas_height_px = bbox.height
 
         # Calculate how many data pixels can fit in the canvas at 1:1 ratio
         # At 1:1, one data pixel = one screen pixel
-        data_width = self._data.shape[1]
-        data_height = self._data.shape[0]
+        canvas_shape = self._get_pixels_shape()
+        data_shape = self._file_raw_data.shape
+        render_shape = (min(data_shape[0], canvas_shape[0]), min(data_shape[1], canvas_shape[1]))
 
-        # Center the view on the middle of the data
-        center_x = data_width / 2.0
-        center_y = data_height / 2.0
-
-        # Calculate visible range (half on each side of center)
-        half_width = canvas_width_px / 2.0
-        half_height = canvas_height_px / 2.0
-
-        # Set limits to show 1:1 pixels, centered
-        # Note: -0.5 offset because imshow centers pixels at integer coordinates
-        self._image_ax.set_xlim(center_x - half_width - 0.5, center_x + half_width - 0.5)
-        self._image_ax.set_ylim(center_y + half_height - 0.5, center_y - half_height - 0.5)  # Inverted
-
-        # Update the canvas
-        self._canvas.draw_idle()
+        self._file_view_region = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
+        self._file_region_clipped = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
+        self._canvas_render_region = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
+        self._canvas_buffer = np.zeros(shape=canvas_shape, dtype=self._file_raw_data.dtype)
+        self._canvas_buffer[:render_shape[0], :render_shape[1]] = self._file_raw_data[:render_shape[0], :render_shape[1]]
 
 
-    def _custom_home(self) -> None:
-        """Custom home button handler that uses the selected mode."""
-        if self._home_mode == "fit":
-            self._home_fit_to_window()
-        elif self._home_mode == "1:1":
-            self._home_one_to_one_pixels()
+    def _get_pixels_shape(self) -> tuple[int, int]:
+        """Get the shape of the pixels in the canvas in pixels."""
+        if self._image_ax is None:
+            return (0, 0)
+        bbox = self._image_ax.get_window_extent()
+        return (int(bbox.height), int(bbox.width))
 
 
     def _on_scroll_zoom(self, event) -> None:
@@ -667,51 +716,115 @@ class SeismicSubWindow(UASSubWindow):
         if event.inaxes != self._image_ax:
             return  # Only zoom when over the image axes
 
-        if self._data is None:
+        if self._canvas_buffer is None or self._file_view_region is None:
             return
 
         # Zoom factor: scroll up = zoom in, scroll down = zoom out
-        zoom_factor = 1.2 if event.button == 'up' else 1/1.2
+        zoom_factor = 1.2
+        if event.button == 'down':
+             zoom_factor = 1/zoom_factor
 
         # Get current axis limits
-        cur_xlim = self._image_ax.get_xlim()
-        cur_ylim = self._image_ax.get_ylim()
-
         # Get mouse position in data coordinates
         xdata = event.xdata
         ydata = event.ydata
-
-        # Calculate current range
-        cur_xrange = cur_xlim[1] - cur_xlim[0]
-        cur_yrange = cur_ylim[1] - cur_ylim[0]
-
-        # Calculate new range (smaller range = more zoomed in)
-        new_xrange = cur_xrange / zoom_factor
-        new_yrange = cur_yrange / zoom_factor
-
+        cur_yrange, cur_xrange = self._get_pixels_shape()
         # Calculate what fraction of the current range the mouse is at
         # This keeps the point under the cursor fixed
-        rel_x = (xdata - cur_xlim[0]) / cur_xrange
-        rel_y = (ydata - cur_ylim[0]) / cur_yrange
-
+        rel_x = xdata / cur_xrange
+        rel_y = ydata / cur_yrange
+        # the requested region (in files coordinates) corresponds exactly to the entire canvas area (in pixels coordinates)
+        old_xrange_request = self._file_view_region.x1 - self._file_view_region.x0
+        old_yrange_request = self._file_view_region.y1 - self._file_view_region.y0
+        # relative position in the canvas corresponds to the same relative postion in the file request area
+        file_x_data = self._file_view_region.x0 + old_xrange_request * rel_x
+        file_y_data = self._file_view_region.y0 + old_yrange_request * rel_y
+        # Calculate new range (smaller range = more zoomed in)
+        new_xrange_request = old_xrange_request / zoom_factor
+        new_yrange_request = old_yrange_request / zoom_factor
         # Calculate new limits centered on the mouse position
-        new_xlim = [xdata - new_xrange * rel_x, xdata + new_xrange * (1 - rel_x)]
-        new_ylim = [ydata - new_yrange * rel_y, ydata + new_yrange * (1 - rel_y)]
+        new_x0 = file_x_data - new_xrange_request * rel_x
+        new_x1 = file_x_data + new_xrange_request * (1 - rel_x)
+        new_y0 = file_y_data - new_yrange_request * rel_y
+        new_y1 = file_y_data + new_yrange_request * (1 - rel_y)
+        self._set_file_view_region(new_x0, new_y0, new_x1, new_y1)
+        self._recreate_canvas_buffer()
+        self._resample_axis_values_4_display()
+        self._set_canvas_to_image()
 
-        # Apply new limits
-        self._image_ax.set_xlim(new_xlim)
-        self._image_ax.set_ylim(new_ylim)
 
-        # Update canvas
-        self._canvas.draw_idle()
+    def _set_file_view_region(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        """Set the crop request."""
+        if self._file_raw_data is None:
+            return
+        file_shape = self._file_raw_data.shape
+
+        def fix_lim(lim0: float, lim1: float, shape: int) -> tuple[float, float]:
+            if lim1 < lim0:
+                lim0, lim1 = lim1, lim0
+            min_range = 2
+            max_range = shape*2
+            while True:
+                lim_range = abs(int(lim1) - int(lim0))
+                if min_range <= lim_range <= max_range:
+                    break
+                lim_center = (int(lim0) + int(lim1)) / 2
+                if lim_range < min_range:
+                    lim_range = min_range + 1
+                elif lim_range > max_range:
+                    lim_range = max_range - 1
+                lim0 = int(lim_center - lim_range/2)
+                lim1 = int(lim_center + lim_range/2)
+            # ensure the limits are at least the minimum range inside the shape of the file
+            shift_lim = max(0, min_range - lim1) + max(0, lim0 - (max_range - min_range))
+            lim0 = lim0 + shift_lim
+            lim1 = lim1 + shift_lim
+            return lim0, lim1
+
+        x0, x1 = fix_lim(x0, x1, file_shape[1])
+        y0, y1 = fix_lim(y0, y1, file_shape[0])
+        if x0 >= x1 or y0 >= y1:
+            return
+
+        self._file_view_region = Bbox([[int(x0), int(y0)], [int(x1), int(y1)]])
+        self._file_region_clipped = Bbox([[max(0, int(x0)), max(0, int(y0))], [min(file_shape[1], int(x1)), min(file_shape[0], int(y1))]])
 
 
-    def _zoom_out(self) -> None:
-        """Zoom out to show full data extent."""
-        if self._data is not None:
-            self._image_ax.set_xlim(-0.5, self._data.shape[1] - 0.5)
-            self._image_ax.set_ylim(self._data.shape[0] - 0.5, -0.5)  # Inverted for image coordinates
-            self._canvas.draw_idle()
+    def _check_canvas_buffer_shape(self) -> None:
+        """Check if the canvas render region is valid."""
+        pixels_shape = self._get_pixels_shape()
+        if pixels_shape[0] < 1 or pixels_shape[1] < 1:
+            return
+        if self._canvas_buffer is not None and self._canvas_buffer.shape == pixels_shape:
+            return
+        self._recreate_canvas_buffer()
+        self._resample_axis_values_4_display()
+
+
+    def _recreate_canvas_buffer(self) -> None:
+        """Resize the cropped data to the new size."""
+        if self._file_raw_data is None or self._file_region_clipped is None or self._file_view_region is None:
+            return
+        request_width = self._file_view_region.x1 - self._file_view_region.x0
+        request_height = self._file_view_region.y1 - self._file_view_region.y0
+        pixels_shape = self._get_pixels_shape()
+        self._canvas_render_region = Bbox([
+            [int((self._file_region_clipped.x0 - self._file_view_region.x0)/request_width*pixels_shape[1]),
+             int((self._file_region_clipped.y0 - self._file_view_region.y0)/request_height*pixels_shape[0])],
+            [int((self._file_region_clipped.x1 - self._file_view_region.x0)/request_width*pixels_shape[1]),
+             int((self._file_region_clipped.y1 - self._file_view_region.y0)/request_height*pixels_shape[0])]
+            ])
+        display_crop = self._canvas_render_region
+        file_crop = self._file_region_clipped
+        self._canvas_buffer = np.zeros(shape=self._get_pixels_shape(), dtype=self._file_raw_data.dtype)
+        # dsize is (width, height), opposite of numpy shape (height, width)
+        dsize_width = int(display_crop.x1) - int(display_crop.x0)
+        dsize_height = int(display_crop.y1) - int(display_crop.y0)
+        cv2.resize(\
+            src=self._file_raw_data[int(file_crop.y0):int(file_crop.y1), int(file_crop.x0):int(file_crop.x1)],\
+            dsize=(dsize_width, dsize_height),\
+            interpolation=cv2.INTER_LINEAR,\
+            dst=self._canvas_buffer[int(display_crop.y0):int(display_crop.y1), int(display_crop.x0):int(display_crop.x1)])
 
 
     @staticmethod
@@ -722,24 +835,6 @@ class SeismicSubWindow(UASSubWindow):
             main_window.add_subwindow(subwindow)
         else:
             subwindow.deleteLater()
-
-
-    @property
-    def canvas(self) -> FigureCanvasQTAgg:
-        """Get the seismic canvas."""
-        return self._canvas
-
-
-    @property
-    def image_ax(self) -> plt.Axes | None:
-        """Get the matplotlib image axes."""
-        return self._image_ax
-
-
-    @property
-    def data(self) -> np.ndarray | None:
-        """Get the loaded seismic data."""
-        return self._data
 
 
     @property
@@ -768,7 +863,7 @@ class SeismicSubWindow(UASSubWindow):
 
     def _update_colorbar_indicator(self, amplitude: float|None) -> None:
         """Update the horizontal indicator line on the colorbar using fast blitting."""
-        if self._image is None or self._colorbar is None or amplitude is None:
+        if self._colorbar is None or amplitude is None:
             # Clear indicator if no amplitude
             if self._colorbar_indicator is not None:
                 self._remove_colorbar_indicator()
@@ -797,7 +892,7 @@ class SeismicSubWindow(UASSubWindow):
             self._canvas.draw_idle()
 
 
-    def get_hover_info(self, x: float|None, z: float|None) -> dict[str, Any] | None:
+    def get_hover_info(self, x: float|None, y: float|None) -> dict[str, Any] | None:
         """
         Calculate hover information for given pixel coordinates.
 
@@ -808,39 +903,43 @@ class SeismicSubWindow(UASSubWindow):
         Returns:
             Dictionary with hover info, or None if out of bounds
         """
-        if self._data is None:
+        data = self._canvas_buffer
+        if data is None or self._canvas_render_region is None:
             return None
-
-        if x is None:
-            ix = -1
-        else:
-            ix = max(0, min(int(x+0.5), self._data.shape[1] - 1))
-        if z is None:
-            iz = -1
-        else:
-            iz = max(0, min(int(z+0.5), self._data.shape[0] - 1))
-
-        amplitude = self._data[iz, ix] if ix >= 0 and iz >= 0 else None
-
-        time_value = simple_interpolation(self._time_samples_seconds, z)
-        distance = simple_interpolation(self._trace_cumulative_distances_meters, x)
-        depth_value = simple_interpolation(self._depth_converted, z)
 
         hover_info = {}
 
-        if time_value is not None:
+        if x is None:
+            ix = -1
+        elif x < self._canvas_render_region.x0 - 0.5 or x > self._canvas_render_region.x1 - 0.5:
+            ix = -1
+        else:
+            ix = max(0, min(int(x+0.5), data.shape[1] - 1))
+            x_in_data_region = x - self._canvas_render_region.x0  # x is the pixel coordinate in the display
+            ind_trace = simple_interpolation(self._horizontal_indices_in_data_region, x_in_data_region)
+            hover_info['trace_number'] = ind_trace
+            distance = simple_interpolation(self._trace_cumulative_distances_display, x_in_data_region)
+            hover_info['distance'] = distance
+
+        if y is None:
+            iy = -1
+        elif y < self._canvas_render_region.y0 - 0.5 or y > self._canvas_render_region.y1 - 0.5:
+            iy = -1
+        else:
+            iy = max(0, min(int(y+0.5), data.shape[0] - 1))
+            y_in_data_region = y - self._canvas_render_region.y0  # y is the pixel coordinate in the display
+            ind_sample = simple_interpolation(self._vertical_indices_in_data_region, y_in_data_region)
+            hover_info['sample_number'] = ind_sample
+            time_value = simple_interpolation(self._time_samples_display, y_in_data_region)
             hover_info['time_units'] = self._time_display_units
-            hover_info['time_value'] = time_value * self._time_display_value_factor
-        if depth_value is not None:
-            hover_info['depth_value'] = depth_value * GlobalSettings.display_length_factor
-        if distance is not None:
-            hover_info['distance'] = distance * GlobalSettings.display_length_factor
-        if amplitude is not None:
+            hover_info['time_value'] = time_value
+            depth_value = simple_interpolation(self._depth_converted_display, y_in_data_region)
+            hover_info['depth_value'] = depth_value
+
+        if ix >= 0 and iy >= 0:
+            amplitude = data[iy, ix]
             hover_info['amplitude'] = amplitude
-        if iz >= 0:
-            hover_info['sample_number'] = iz
-        if ix >= 0:
-            hover_info['trace_number'] = ix
+            
         return hover_info
 
 
@@ -876,6 +975,9 @@ class SeismicSubWindow(UASSubWindow):
                     settings[key] = DisplaySettingsDialog.default_settings[key]
             self._display_settings = settings
         self._update_first_arrival_sample(self._display_settings['ind_sample_time_first_arrival'])
+        self._calculate_depth_converted()
+        self._resample_axis_values_4_display()
+        self._apply_image_four_axes_tick_settings()
         self.canvas_render()
 
 
@@ -991,10 +1093,17 @@ class SeismicSubWindow(UASSubWindow):
             return False
 
         self._filename = filename
-        self._amplitude_min = float(np.min(self._data))
-        self._amplitude_max = float(np.max(self._data))
+        # Calculate cumulative distances along the survey line
+        # Distance from trace i-1 to trace i for each trace
+        trace_distances_meters = np.sqrt(np.sum(np.diff(self._trace_coords_meters, axis=0)**2, axis=1))
+        # Cumulative sum with 0.0 prepended for first trace
+        self._trace_cumulative_distances_meters = np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
+
+        self._amplitude_min = float(np.min(self._file_raw_data))
+        self._amplitude_max = float(np.max(self._file_raw_data))
+
         # Calculate time range in seconds
-        nt = self._data.shape[0]
+        nt = self._file_raw_data.shape[0]
         time_range_seconds = (nt - 1) * self._time_interval_seconds
         if time_range_seconds < 0.01:
             # display time in nano seconds
@@ -1016,13 +1125,8 @@ class SeismicSubWindow(UASSubWindow):
             self._trace_time_first_arrival_seconds = time_range_seconds * 0.1
 
         self._update_first_arrival_sample(int(self._trace_time_first_arrival_seconds / self._time_interval_seconds))
-
-        # Calculate cumulative distances along the survey line
-        # Distance from trace i-1 to trace i for each trace
-        trace_distances_meters = np.sqrt(np.sum(np.diff(self._trace_coords_meters, axis=0)**2, axis=1))
-        # Cumulative sum with 0.0 prepended for first trace
-        self._trace_cumulative_distances_meters = np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
-
+        self._calculate_depth_converted()
+        self._set_view_file_region_by_mode() # creating the canvas buffer
         self.canvas_render()
         return ret
 
@@ -1030,8 +1134,8 @@ class SeismicSubWindow(UASSubWindow):
     def _load_segy_data(self, filename: str) -> tuple[bool, str]:
         try:
             with segyio.open(filename, "r", ignore_geometry=True) as f:
-                self._data = f.trace.raw[:].T
-                if self._data is None or self._data.size == 0:
+                self._file_raw_data = f.trace.raw[:].T
+                if self._file_raw_data is None or self._file_raw_data.size == 0:
                     return False, "No data found in SEGY file"
                 # Extract metadata from SEGY file
                 # Sample interval from binary header (bytes 3217-3218, in microseconds per SEG-Y standard)
@@ -1108,8 +1212,8 @@ class SeismicSubWindow(UASSubWindow):
         try:
             file_base, _ = os.path.splitext(filename)
             data, info = readMALA(file_base)
-            self._data = np.array(data)
-            nt, nx = self._data.shape[0], self._data.shape[1]
+            self._file_raw_data = np.array(data)
+            nt, nx = self._file_raw_data.shape[0], self._file_raw_data.shape[1]
 
             # Extract metadata from MALA header
             # Calculate sample interval (dt) from TIMEWINDOW and SAMPLES
@@ -1142,20 +1246,20 @@ class SeismicSubWindow(UASSubWindow):
 
     def _on_draw_complete(self, event) -> None:
         """Cache colorbar background after draw completes for fast blitting."""
-        if self._colorbar is not None and self._data is not None:
-            try:
-                self._colorbar_background = self._canvas.copy_from_bbox(self._colorbar.ax.bbox)
-            except Exception:
-                # If copy fails, just skip caching
-                self._colorbar_background = None
+        if self._colorbar is None:
+            return
+        try:
+            self._colorbar_background = self._canvas.copy_from_bbox(self._colorbar.ax.bbox)
+        except Exception:
+            # If copy fails, just skip caching
+            self._colorbar_background = None
 
 
     def _on_resize(self, event) -> None:
         """Handle canvas resize event to maintain fixed pixel margins."""
-        if self._data is not None:
-            # Invalidate cached background since layout changes
-            self._colorbar_background = None
-            self._adjust_layout_with_fixed_margins()
+        # Invalidate cached background since layout changes
+        self._colorbar_background = None
+        self._adjust_layout_with_fixed_margins()
 
 
     def _adjust_layout_with_fixed_margins(self) -> None:
@@ -1209,50 +1313,43 @@ class SeismicSubWindow(UASSubWindow):
 
     def _on_global_settings_changed(self) -> None:
         """Callback when global settings change - update the layout."""
-        if self._data is None:
-            return
         self._adjust_layout_with_fixed_margins()
-
-
-    def _recreate_subplots(self) -> None:
-        """Recreate subplots with updated parameters."""
-
-        # Clear existing subplots
-        self._fig.clear()
-
-        self.create_subplots()
-        # Re-render if we have data
-        if self._data is not None:
-            self.canvas_render()
 
 
     def canvas_render(self) -> None:
         """Render the seismic data to the canvas."""
-        if self._data is None:
+        if self._canvas_buffer is None:
             return
-
-        # Save current zoom state before clearing
-        xlim = self._image_ax.get_xlim()
-        ylim = self._image_ax.get_ylim()
 
         self._remove_colorbar()
         self._remove_colorbar_indicator()
 
         self._image_ax.clear()
+        self._check_canvas_buffer_shape()
+        if self._canvas_buffer is not None:
 
-        self._apply_display_settings()
+            # Set axis limits based on buffer shape (not axes size which changes with colorbar)
+            if self._image_ax is not None:
+                height_px, width_px = self._get_pixels_shape()
+                if width_px > 0 and height_px > 0:
 
-        # IMPORTANT: Restore zoom or set initial limits AFTER _apply_display_settings()
-        # The _apply_display_settings() method calls imshow(), which triggers matplotlib's
-        # autoscaling and can override any axis limits that were set before.
-        # Setting limits here (after imshow) ensures they are preserved and prevents the
-        # image from being shifted or having white strips at the edges.
-        if xlim == (0.0, 1.0):  # Default uninitialized state
-            self._image_ax.set_xlim(-0.5, self._data.shape[1] - 0.5)
-            self._image_ax.set_ylim(self._data.shape[0] - 0.5, -0.5)
-        else:
-            self._image_ax.set_xlim(xlim)
-            self._image_ax.set_ylim(ylim)
+                    self._image_ax.set_xlim(-0.5, width_px - 0.5)
+                    self._image_ax.set_ylim(height_px - 0.5, -0.5)  # Inverted
+
+            # Apply colormap settings
+            colormap = self._display_settings['colormap']
+            flip_colormap = self._display_settings['flip_colormap']
+            if flip_colormap:
+                colormap = colormap + '_r'
+
+            # Display the image (should not interpolate because data is already resampled)
+            self._image = self._image_ax.imshow(self._canvas_buffer, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max, interpolation='none')
+
+            # Apply other display settings
+            self._check_colorbar_ax_visibility()
+            self._update_file_name_in_plot(None)
+            self._apply_image_four_axes_tick_settings()
+            self._canvas.draw_idle()
 
         self._adjust_layout_with_fixed_margins()
 
@@ -1275,8 +1372,6 @@ class SeismicSubWindow(UASSubWindow):
         else:
             self._image_ax = self._fig.add_subplot(1, 1, 1)
             self._colorbar_ax = None
-
-
 
 
     def closeEvent(self, event) -> None:
@@ -1337,7 +1432,7 @@ class SeismicSubWindow(UASSubWindow):
                     pass  # In case it's not connected
 
                 # Connect to our custom home handler
-                action.triggered.connect(self._custom_home)
+                action.triggered.connect(self._home)
                 break
 
 
@@ -1415,20 +1510,6 @@ class SeismicSubWindow(UASSubWindow):
         self._adjust_layout_with_fixed_margins()
 
 
-    def _apply_display_settings(self) -> None:
-        """Apply the display settings to the image_ax."""
-        if self._data is None:
-            return
-        colormap = self._display_settings['colormap']
-        flip_colormap = self._display_settings['flip_colormap']
-        # Add '_r' suffix to flip the colormap
-        if flip_colormap:
-            colormap = colormap + '_r'
-        self._image = self._image_ax.imshow(self._data, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max)
-        self._check_colorbar_ax_visibility()
-        self._update_file_name_in_plot(None)
-        self._apply_image_four_axes_tick_settings()
-
 
     def _update_file_name_in_plot(self, set_value: bool|None) -> None:
         if set_value is not None:
@@ -1450,8 +1531,13 @@ class SeismicSubWindow(UASSubWindow):
         # Primary axes (xaxis/yaxis) are single objects that get updated in place.
         # Secondary axes are created by secondary_xaxis()/secondary_yaxis() calls,
         # which create NEW axes objects each time, so old ones must be removed first.
-        for child_ax in self._image_ax.child_axes[:]:  # [:] creates copy while iterating
-            child_ax.remove()
+        if self._image_ax is None or self._image_ax.figure is not self._fig:
+            return
+        if self._image_ax.figure is not self._fig:
+            return
+        if hasattr(self._image_ax, 'child_axes'):
+            for child_ax in self._image_ax.child_axes[:]:  # [:] creates copy while iterating
+                child_ax.remove()
 
         # Get current settings
         top = self._display_settings['top']
@@ -1497,13 +1583,11 @@ class SeismicSubWindow(UASSubWindow):
             ax2.set_visible(True)
             ax2.tick_params(axis='y', right=True, labelright=True)
             self._apply_single_axis_tick_settings(ax2.yaxis, right, self._display_settings['right_major_tick'], self._display_settings['right_minor_ticks'])
-        # render four axes
-        self._canvas.draw_idle()
 
 
     def _check_colorbar_ax_visibility(self) -> bool:
         colorbar_visible = self._display_settings['colorbar_visible'] # must check with default value True
-        if not colorbar_visible or self._data is None or np.isnan(self._amplitude_min) or np.isnan(self._amplitude_max):
+        if not colorbar_visible or self._canvas_buffer is None or np.isnan(self._amplitude_min) or np.isnan(self._amplitude_max):
             self._remove_colorbar_ax()
             return False
             
@@ -1607,81 +1691,57 @@ class SeismicSubWindow(UASSubWindow):
         if axis_unit_label:
             label = f"{label} [{axis_unit_label}]"
         axis.set_label_text(label)
+        # minor ticks do not have tick labels
+        axis.set_minor_formatter(plt.NullFormatter()) 
 
-        if axis_type == AxisType.DEPTH:
-            if self._depth_converted is None:
-                return
-            axis_vector_values = self._depth_converted * GlobalSettings.display_length_factor
-        elif axis_type == AxisType.DISTANCE:
-            if self._trace_cumulative_distances_meters is None:
-                return
-            axis_vector_values = self._trace_cumulative_distances_meters * GlobalSettings.display_length_factor
-        else:
-            axis_vector_values = None
-        if axis_vector_values is not None:
-            axis_vector_indices = np.arange(len(axis_vector_values))
-        else:
-            axis_vector_indices = None
-        axis_min, axis_step, axis_num_samples = self._get_axis_geometry_4_display(axis_type)
-
-        minor_ticks_per_major = min(minor_ticks_per_major, axis_num_samples)
-        axis_max = axis_min + axis_step * (axis_num_samples - 1)
-        max_major_tick_distance = max(axis_step, axis_step*(axis_num_samples-1))
-        min_major_tick_distance = max(axis_step, 0.001*max_major_tick_distance)
-        if major_tick_distance <= min_major_tick_distance:
-            major_tick_distance = min_major_tick_distance
-            minor_ticks_per_major = 0
-        if major_tick_distance >= max_major_tick_distance:
-            major_tick_distance = max_major_tick_distance
-            minor_ticks_per_major = max(min(10,axis_num_samples), minor_ticks_per_major)
-        # Calculate tick positions in display units
-        sign_axis_min = int(np.sign(axis_min))
-        sign_axis_max = int(np.sign(axis_max))
-        n_min = int(abs(axis_min) / major_tick_distance) * sign_axis_min
-        n_max = int(abs(axis_max) / major_tick_distance) * sign_axis_max
-        if n_min >= n_max:
-            # Use automatic tick placement with custom formatter for distance axis
-            axis.set_major_locator(plt.AutoLocator())
-            axis.set_minor_locator(AutoMinorLocator())
-            return
-
-        major_tick_values = np.arange(n_min, n_max + 1) * major_tick_distance
-        if axis_vector_values is not None:
-            major_tick_positions = np.interp(major_tick_values, axis_vector_values, axis_vector_indices)
-        else:
-            major_tick_positions = (major_tick_values - axis_min) / axis_step
-        # Set ticks at data coordinate positions with display unit labels
-        axis.set_ticks(major_tick_positions)
-        axis.set_ticklabels([format_value(val, 3) for val in major_tick_values])
-
-        if minor_ticks_per_major < 2:
+        axis_vector_values_for_display = self._get_axis_values_for_display(axis_type)
+        if axis_vector_values_for_display is None:
+            axis.set_major_locator(plt.NullLocator())
             axis.set_minor_locator(plt.NullLocator())
             return
-
-        # Calculate minor tick positions
+        minor_ticks_per_major = max(minor_ticks_per_major, 1)
+        axis_vector_indices, axis_vector_values = axis_vector_values_for_display
         minor_tick_distance = major_tick_distance / minor_ticks_per_major
-        n_min_minor = int(abs(axis_min) / minor_tick_distance) * sign_axis_min
-        n_max_minor = int(abs(axis_max) / minor_tick_distance) * sign_axis_max
-        minor_tick_values = np.arange(n_min_minor, n_max_minor + 1)
-        minor_tick_values = minor_tick_values[minor_tick_values % minor_ticks_per_major != 0] * minor_tick_distance
-
-        # Convert to data coordinates
-        if axis_vector_values is not None:
-            minor_tick_positions = np.interp(minor_tick_values, axis_vector_values, axis_vector_indices)
+        ind_minor_min = int(np.ceil(axis_vector_values[0] / minor_tick_distance))
+        ind_minor_max = int(np.floor(axis_vector_values[-1] / minor_tick_distance))
+        if ind_minor_max - ind_minor_min < 0:
+            axis.set_major_locator(plt.NullLocator())
+            axis.set_minor_locator(plt.NullLocator())
+            return
+        ind_all_ticks = np.arange(ind_minor_min, ind_minor_max + 1)
+        all_tick_values = ind_all_ticks * minor_tick_distance
+        all_tick_positions = np.interp(all_tick_values, axis_vector_values, axis_vector_indices)
+        select_minors = ind_all_ticks % minor_ticks_per_major != 0
+        minor_positions = all_tick_positions[select_minors]
+        if len(minor_positions) > 0:
+            axis.set_ticks(minor_positions, minor=True)
         else:
-            minor_tick_positions = (minor_tick_values - axis_min) / axis_step
-        axis.set_ticks(minor_tick_positions, minor=True)
+            axis.set_minor_locator(plt.NullLocator())
+        
+        major_positions = all_tick_positions[~select_minors]
+        if len(major_positions) > 0:
+            axis.set_ticks(major_positions)
+            axis.set_ticklabels([format_value(val, 3) for val in all_tick_values[~select_minors]])
+        else:
+            axis.set_major_locator(plt.NullLocator())
 
 
-    def _update_first_arrival_sample(self, ind_sample_time_first_arrival: int) -> int:
-        nt = self._data.shape[0]
+    def _on_change_first_arrival_sample(self, ind_sample_time_first_arrival: int) -> int:
+        self._update_first_arrival_sample(ind_sample_time_first_arrival)
+        self._calculate_depth_converted()
+        self._resample_axis_values_4_display()
+        self._apply_image_four_axes_tick_settings()
+        self._canvas.draw_idle()
+        return self._parent._display_settings['ind_sample_time_first_arrival'] # updated value
+
+
+    def _update_first_arrival_sample(self, ind_sample_time_first_arrival: int) -> None:
+        nt = self._file_raw_data.shape[0]
         ind_sample_time_first_arrival = max(0,min(ind_sample_time_first_arrival, nt - 1))
         self._time_first_arrival_seconds = ind_sample_time_first_arrival * self._time_interval_seconds
         self._display_settings['ind_sample_time_first_arrival'] = ind_sample_time_first_arrival
         self._time_samples_seconds = np.arange(nt) * self._time_interval_seconds - self._time_first_arrival_seconds
-        self._calculate_depth_converted()
-        return ind_sample_time_first_arrival
-        
+
 
     def _calculate_depth_converted(self) -> None:
         """
@@ -1721,6 +1781,64 @@ class SeismicSubWindow(UASSubWindow):
         self._depth_converted[ind_sample_time_first_arrival:] = np.sqrt(np.maximum(slant_distance**2 - half_offset**2, 0))
 
 
+    def _resample_axis_values_4_display(self) -> None:
+        crop_response = self._file_region_clipped
+        render_region = self._canvas_render_region
+        if render_region is None or crop_response is None:
+            return
+
+        def resample_axis_values_to_display(axis_values: np.ndarray | None, file_ind0: int, file_ind1: int, pixel_ind0: int, pixel_ind1: int, display_factor: float) -> np.ndarray | None:
+            if axis_values is None or len(axis_values) == 0 or file_ind0 >= file_ind1 or pixel_ind0 >= pixel_ind1 or display_factor is None or np.isnan(display_factor) or display_factor <= 0.0:
+                return None
+            # resample axis values to display to be the same length as the display data
+            display_length = pixel_ind1 - pixel_ind0
+            file_values_sliced = axis_values[file_ind0:file_ind1] * display_factor
+            slice_length = len(file_values_sliced)
+            display_indices = np.linspace(start=0,stop=slice_length-1,num=display_length)
+            return np.interp(display_indices, np.arange(slice_length), file_values_sliced)
+        
+        self._trace_cumulative_distances_display = resample_axis_values_to_display(\
+            axis_values=self._trace_cumulative_distances_meters,\
+            file_ind0=int(crop_response.x0),\
+            file_ind1=int(crop_response.x1),\
+            pixel_ind0=int(render_region.x0),\
+            pixel_ind1=int(render_region.x1),\
+            display_factor=GlobalSettings.display_length_factor
+        )
+        self._time_samples_display = resample_axis_values_to_display(\
+            axis_values=self._time_samples_seconds,\
+            file_ind0=int(crop_response.y0),\
+            file_ind1=int(crop_response.y1),\
+            pixel_ind0=int(render_region.y0),\
+            pixel_ind1=int(render_region.y1),\
+            display_factor=self._time_display_value_factor
+        )
+        self._depth_converted_display = resample_axis_values_to_display(\
+            axis_values=self._depth_converted,\
+            file_ind0=int(crop_response.y0),\
+            file_ind1=int(crop_response.y1),\
+            pixel_ind0=int(render_region.y0),\
+            pixel_ind1=int(render_region.y1),\
+            display_factor=GlobalSettings.display_length_factor
+        )
+        self._horizontal_indices_in_data_region = resample_axis_values_to_display(\
+            axis_values=np.arange(self._file_raw_data.shape[1], dtype=int),\
+            file_ind0=int(crop_response.x0),\
+            file_ind1=int(crop_response.x1),\
+            pixel_ind0=int(render_region.x0),\
+            pixel_ind1=int(render_region.x1),\
+            display_factor=1.0
+        )
+        self._vertical_indices_in_data_region = resample_axis_values_to_display(\
+            axis_values=np.arange(self._file_raw_data.shape[0], dtype=int),\
+            file_ind0=int(crop_response.y0),\
+            file_ind1=int(crop_response.y1),\
+            pixel_ind0=int(render_region.y0),\
+            pixel_ind1=int(render_region.y1),\
+            display_factor=1.0
+        )
+
+
     def _save_segy(self) -> None:
         self.save_file('sgy')
 
@@ -1737,7 +1855,7 @@ class SeismicSubWindow(UASSubWindow):
         Save current data to a file.
 
         """
-        if self._data is None:
+        if self._file_raw_data is None:
             self._show_error("Error", "No data to save")
             return
 
@@ -1770,25 +1888,25 @@ class SeismicSubWindow(UASSubWindow):
                 if file_type == 'sgy':
                     # Create a minimal SEGY file with current data
                     spec = segyio.spec()
-                    spec.samples = range(self._data.shape[0])
-                    spec.tracecount = self._data.shape[1]
+                    spec.samples = range(self._file_raw_data.shape[0])
+                    spec.tracecount = self._file_raw_data.shape[1]
                     spec.format = 1  # 4-byte IBM float
 
                     with segyio.create(filename, spec) as f:
-                        for i, trace in enumerate(self._data.T):
+                        for i, trace in enumerate(self._file_raw_data.T):
                             f.trace[i] = trace
                 else: # rd3 or rd7
                     file_base, _ = os.path.splitext(filename)
                     data_file = file_base + '.' + file_type
 
                     if file_type == 'rd3':
-                        data_normalized = self._data / np.max(np.abs(self._data))
+                        data_normalized = self._file_raw_data / np.max(np.abs(self._file_raw_data))
                         data_int16 = (data_normalized * 32767).astype(np.int16)
 
                         # Save binary data
                         data_int16.T.tofile(data_file)
                     else:
-                        data_float32 = self._data.astype(np.float32)
+                        data_float32 = self._file_raw_data.astype(np.float32)
                         data_float32.T.tofile(data_file)
                 QMessageBox.information(self, "Success", f"Saved to {filename}")
                 break
