@@ -1732,7 +1732,7 @@ class SeismicSubWindow(UASSubWindow):
         self._resample_axis_values_4_display()
         self._apply_image_four_axes_tick_settings()
         self._canvas.draw_idle()
-        return self._parent._display_settings['ind_sample_time_first_arrival'] # updated value
+        return self._display_settings['ind_sample_time_first_arrival'] # updated value
 
 
     def _update_first_arrival_sample(self, ind_sample_time_first_arrival: int) -> None:
