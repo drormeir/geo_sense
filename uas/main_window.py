@@ -8,6 +8,7 @@ from __future__ import annotations
 from enum import Enum, auto
 from typing import Any, Self
 import uuid
+import os
 
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 from PySide6.QtCore import Qt, QRect
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QBrush, QPixmap
 
 from .subwindow import UASSubWindow
 from .factory import FactoryRegistry
@@ -64,12 +65,12 @@ def fit_into_geometry(x: int, y: int, width: int, height: int, rect: QRect) -> t
 class UASMainWindow(QMainWindow):
     """
     Base class for all main windows in the UAS framework.
-    
+
     Purpose:
         Provides the foundation for main application windows with support for
         multiple display modes (MDI/Tabbed), subwindow management, toolbars,
         dock widgets, and session persistence.
-    
+
     Flow:
         1. Initializes with MDI mode by default, sets up status bar and menus
         2. Manages list of subwindows and tracks active subwindow
@@ -80,12 +81,18 @@ class UASMainWindow(QMainWindow):
         7. On close, saves session if auto-save enabled and it's the last window
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    # Class variable: tracks the most recently used background image for inheritance
+    _last_background_image: str | None = None
+
+    def __init__(self, parent: QWidget | None = None, background_image: str | None = None) -> None:
         super().__init__(parent)
         self._id = str(uuid.uuid4())
         self._display_mode = DisplayMode.MDI
         self._subwindows: list[UASSubWindow] = []
         self._active_subwindow: UASSubWindow | None = None
+
+        # Background image: use provided, fall back to last used
+        self._background_image: str | None = background_image if background_image else UASMainWindow._last_background_image
 
         self._mdi_area: QMdiArea | None = None
         self._tab_widget: QTabWidget | None = None
@@ -177,6 +184,7 @@ class UASMainWindow(QMainWindow):
             self._mdi_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             self._mdi_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             self._mdi_area.subWindowActivated.connect(self._on_mdi_subwindow_activated)
+            self._apply_background_image()
             self._central_layout.addWidget(self._mdi_area)
         elif mode == DisplayMode.TABBED:
             self._tab_widget = QTabWidget()
@@ -232,6 +240,43 @@ class UASMainWindow(QMainWindow):
         close_action.setShortcut("Ctrl+W")
         close_action.triggered.connect(self._close_active_subwindow)
         self.addAction(close_action)
+
+
+    def _apply_background_image(self) -> None:
+        """Apply the tiled background image to the MDI area using QBrush."""
+        if self._mdi_area is None:
+            return
+
+        if self._background_image and os.path.isfile(self._background_image):
+            pixmap = QPixmap(self._background_image)
+            if not pixmap.isNull():
+                brush = QBrush(pixmap)
+                self._mdi_area.setBackground(brush)
+        else:
+            # Reset to default background
+            self._mdi_area.setBackground(QBrush())
+
+
+    def set_background_image(self, path: str | None) -> None:
+        """Set the background image for this main window's MDI area.
+
+        Args:
+            path: Path to the image file, or None to clear the background.
+
+        Note:
+            When a background is set, it becomes the default for new windows.
+        """
+        self._background_image = path
+        # Update class variable so new windows inherit this background
+        if path:
+            UASMainWindow._last_background_image = path
+        self._apply_background_image()
+
+
+    @property
+    def background_image(self) -> str | None:
+        """Get the current background image path for this window."""
+        return self._background_image
 
 
     def create_toolbar(
@@ -457,6 +502,7 @@ class UASMainWindow(QMainWindow):
                 "width": self.width(),
                 "height": self.height(),
             },
+            "background_image": self._background_image,
             "subwindows": [sw.serialize() for sw in self._subwindows],
         }
 
@@ -467,6 +513,9 @@ class UASMainWindow(QMainWindow):
             self._id = state["id"]
         if "title" in state:
             self.setWindowTitle(state["title"])
+        if "background_image" in state:
+            self._background_image = state["background_image"]
+            self._apply_background_image()
         if "geometry" in state:
             geo = state["geometry"]
             x, y, width, height = geo["x"], geo["y"], geo["width"], geo["height"]

@@ -15,6 +15,7 @@ Command-line options:
 
 from typing import Any
 import sys
+import os
 import argparse
 
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -55,7 +56,8 @@ class SeismicMainWindow(UASMainWindow):
     _pending_auto_exit_seconds = None  # Class variable for auto-exit timer
 
     def __init__(self, parent=None, screenshot_path: str = None) -> None:
-        super().__init__(parent)
+        background = os.path.join(os.path.dirname(__file__), "Geo_Sense.png")
+        super().__init__(parent, background_image=background)
         self.setWindowTitle("Seismic Viewer")
         self.setWindowIcon(create_gs_icon())
 

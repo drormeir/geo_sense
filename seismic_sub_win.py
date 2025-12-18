@@ -451,6 +451,8 @@ class SeismicSubWindow(UASSubWindow):
         self._nav_toolbar = NavigationToolbar2QT(self._canvas, self)
         # Hide coordinate display in toolbar
         self._nav_toolbar.set_message = lambda x: None
+        # Remove internal margins so separators can span full height
+        self._nav_toolbar.layout().setContentsMargins(0, 0, 0, 0)
 
         # Replace "Configure subplots" action with Display Settings
         self._replace_configure_subplots_action()
@@ -463,6 +465,9 @@ class SeismicSubWindow(UASSubWindow):
 
         # Add Open button to toolbar
         self._add_open_button()
+
+        # Add Filters button to toolbar
+        self._add_filters_button()
 
         # Add context menu to NavigationToolbar
         self._nav_toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -877,11 +882,13 @@ class SeismicSubWindow(UASSubWindow):
             # Restore clean background
             self._canvas.restore_region(self._colorbar_background)
 
-            # Draw new indicator line
+            # Remove old indicator and draw new one at new position
+            self._remove_colorbar_indicator()
             self._create_colorbar_indicator(amplitude)
 
             # Draw just the indicator
-            self._colorbar.ax.draw_artist(self._colorbar_indicator)
+            if self._colorbar_indicator is not None:
+                self._colorbar.ax.draw_artist(self._colorbar_indicator)
 
             # Blit only the colorbar area (fast!)
             self._canvas.blit(self._colorbar.ax.bbox)
@@ -1023,6 +1030,11 @@ class SeismicSubWindow(UASSubWindow):
         display_settings_action = QAction("Display Settings...", self)
         display_settings_action.triggered.connect(self._show_display_settings)
         context_menu.addAction(display_settings_action)
+
+        # Apply Filters action
+        apply_filters_action = QAction("Apply Filters...", self)
+        apply_filters_action.triggered.connect(self._on_filters_clicked)
+        context_menu.addAction(apply_filters_action)
 
         # Show menu at cursor position
         context_menu.exec(self.mapToGlobal(position))
@@ -1337,10 +1349,7 @@ class SeismicSubWindow(UASSubWindow):
                     self._image_ax.set_ylim(height_px - 0.5, -0.5)  # Inverted
 
             # Apply colormap settings
-            colormap = self._display_settings['colormap']
-            flip_colormap = self._display_settings['flip_colormap']
-            if flip_colormap:
-                colormap = colormap + '_r'
+            colormap = self._get_colormap()
 
             # Display the image (should not interpolate because data is already resampled)
             self._image = self._image_ax.imshow(self._canvas_buffer, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max, interpolation='none')
@@ -1396,6 +1405,55 @@ class SeismicSubWindow(UASSubWindow):
             self._nav_toolbar.insertAction(actions[0], open_action)
         else:
             self._nav_toolbar.addAction(open_action)
+
+
+    def _add_filters_button(self) -> None:
+        """Add a Filters button to the NavigationToolbar after the Save button."""
+        # Use a standard Qt icon for filters
+        filter_icon = self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogDetailedView)
+
+        # Create the Filters action
+        filter_action = QAction(filter_icon, "Filters", self)
+        filter_action.setToolTip("Apply Filters...")
+        filter_action.triggered.connect(self._on_filters_clicked)
+
+        # Find the Save action and insert after it with a separator
+        save_action_index = None
+        actions = self._nav_toolbar.actions()
+        for i, action in enumerate(actions):
+            if "Save" in action.text() or "save" in action.toolTip().lower():
+                save_action_index = i
+                break
+
+        if save_action_index is not None and save_action_index + 1 < len(actions):
+            # Insert filter action first, then custom separator before it
+            next_action = actions[save_action_index + 1]
+            self._nav_toolbar.insertAction(next_action, filter_action)
+
+            # Create custom separator using QFrame for full control
+            from PySide6.QtWidgets import QFrame, QSizePolicy
+            sep_frame = QFrame()
+            sep_frame.setFrameShape(QFrame.Shape.VLine)
+            sep_frame.setFrameShadow(QFrame.Shadow.Plain)
+            sep_frame.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+
+            # Style with contrasting color based on toolbar background
+            bg_color = self._nav_toolbar.palette().color(self._nav_toolbar.backgroundRole())
+            separator_color = "#404040" if bg_color.lightness() > 128 else "#c0c0c0"
+            sep_frame.setStyleSheet(f"color: {separator_color}; margin: 0px 4px;")
+            sep_frame.setFixedWidth(2)
+
+            self._nav_toolbar.insertWidget(filter_action, sep_frame)
+        else:
+            # Fallback: add at the end
+            self._nav_toolbar.addSeparator()
+            self._nav_toolbar.addAction(filter_action)
+
+
+    def _on_filters_clicked(self) -> None:
+        """Callback for filters button/menu - will create filters GUI in the future."""
+        # TODO: Implement filters dialog GUI
+        print("Filters clicked - GUI to be implemented")
 
 
     def _replace_configure_subplots_action(self) -> None:
@@ -1497,10 +1555,21 @@ class SeismicSubWindow(UASSubWindow):
             self._display_settings['colormap'] = scheme
         if flip is not None: # work for both values of flip (True/False)
             self._display_settings['flip_colormap'] = flip
-        self._remove_colorbar_ax()  # force redraw of the colorbar
-        self._check_colorbar_ax_visibility()
-        self._adjust_layout_with_fixed_margins()
+        if self._image is None:
+            return
+        # Update the image colormap
+        self._image.set_cmap(self._get_colormap())
+        # Invalidate cached background (colorbar appearance changed)
+        self._colorbar_background = None
+        # Force full draw to recache background for blitting
+        self._canvas.draw()
 
+
+    def _get_colormap(self) -> str:
+        colormap = self._display_settings['colormap']
+        if self._display_settings['flip_colormap']:
+            colormap = colormap + '_r'
+        return colormap
 
     def _set_colorbar_visibility(self, visible: bool|int):
         if isinstance(visible, int):
@@ -1696,11 +1765,22 @@ class SeismicSubWindow(UASSubWindow):
 
         axis_vector_values_for_display = self._get_axis_values_for_display(axis_type)
         if axis_vector_values_for_display is None:
+            axis_vector_indices = None
+            axis_vector_values = None
+        else:
+            axis_vector_indices, axis_vector_values = axis_vector_values_for_display
+        if axis_vector_indices is None or len(axis_vector_indices) == 0 or axis_vector_values is None or len(axis_vector_values) == 0:
             axis.set_major_locator(plt.NullLocator())
             axis.set_minor_locator(plt.NullLocator())
             return
+        assert len(axis_vector_indices) == len(axis_vector_values)
+        if len(axis_vector_values) == 1:
+            axis.set_major_locator(plt.FixedLocator([axis_vector_values[0]]))
+            axis.set_minor_locator(plt.NullLocator())
+            return
+        average_tick_distance = (axis_vector_values[-1] - axis_vector_values[0]) / (len(axis_vector_values) - 1)
         minor_ticks_per_major = max(minor_ticks_per_major, 1)
-        axis_vector_indices, axis_vector_values = axis_vector_values_for_display
+        major_tick_distance = max(major_tick_distance, average_tick_distance)
         minor_tick_distance = major_tick_distance / minor_ticks_per_major
         ind_minor_min = int(np.ceil(axis_vector_values[0] / minor_tick_distance))
         ind_minor_max = int(np.floor(axis_vector_values[-1] / minor_tick_distance))
