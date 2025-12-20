@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QFileDialog,
     QMenu,
-    QToolBar,
+    QFrame,
     QDialog,
-    QFormLayout,
+    QSizePolicy,
     QComboBox,
     QDialogButtonBox,
     QGroupBox,
@@ -26,12 +26,13 @@ from PySide6.QtWidgets import (
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import matplotlib.image as plt_image
-from matplotlib.ticker import AutoMinorLocator
+
 from uas import (
     UASSubWindow,
     UASMainWindow,
@@ -45,6 +46,8 @@ import segyio
 from gprpy.toolbox.gprIO_MALA import readMALA
 from gs_icon import create_gs_icon
 from global_settings import GlobalSettings, UnitSystem
+from filters import FilterPipeline, FiltersDialog
+from data_file import DataFile
 
 class AxisType(Enum):
     NONE = "None"
@@ -401,8 +404,10 @@ class SeismicSubWindow(UASSubWindow):
         # Call parent init (will call empty on_create)
         super().__init__(main_window, parent)
 
-        self._filename: str = ""
-        self._file_raw_data: np.ndarray | None = None
+        self._data_file: DataFile | None = None
+        self._processed_data: np.ndarray | None = None  # Cache for filtered data
+
+        self._filter_pipeline = FilterPipeline()
         self._file_view_region: Bbox | None = None
         self._file_region_clipped: Bbox | None = None
         self._canvas_render_region: Bbox | None = None
@@ -414,24 +419,19 @@ class SeismicSubWindow(UASSubWindow):
         self._colorbar_ax: plt.Axes | None = None
         self._image_ax: plt.Axes | None = None
         self._colorbar_indicator: Line2D | None = None
-        self._colorbar_indicator_amplitude: float | None = None
         self._colorbar_background = None  # Cache for blitting
 
-        # trace distances data in meters
-        self._trace_coords_meters: np.ndarray | None = None
         self._trace_cumulative_distances_meters: np.ndarray | None = None
         self._trace_cumulative_distances_display: np.ndarray | None = None
 
         # time samples data in seconds
-        self._time_interval_seconds: float = 1.0
         self._time_first_arrival_seconds: float = 0.0
-        self._trace_time_delays_seconds: np.ndarray | None = None # time delays in seconds for each trace
-        self._time_samples_seconds: np.ndarray | None = None
-        self._time_samples_display: np.ndarray | None = None
+        self._time_axis_values_seconds: np.ndarray | None = None
+        self._time_axis_values_display: np.ndarray | None = None
         self._time_display_units: str = "s"
         self._time_display_value_factor: float = 1.0 # for display time in nano seconds, milliseconds, seconds
         self._offset_meters: float = 0.0
-        self._depth_converted: np.ndarray | None = None
+        self._depth_converted_meters: np.ndarray | None = None
         self._depth_converted_display: np.ndarray | None = None
         self._horizontal_indices_in_data_region: np.ndarray | None = None
         self._vertical_indices_in_data_region: np.ndarray | None = None
@@ -441,7 +441,6 @@ class SeismicSubWindow(UASSubWindow):
         # Display settings
         self._display_settings: dict[str, Any] = dict(DisplaySettingsDialog.default_settings)
 
-        self.title = "Seismic View"
         self._fig = Figure(figsize=(10, 6))
 
         self.create_subplots()
@@ -531,9 +530,9 @@ class SeismicSubWindow(UASSubWindow):
                 return None
             return samples, self._trace_cumulative_distances_display
         if axis_type == AxisType.TIME:  
-            if self._time_samples_display is None:
+            if self._time_axis_values_display is None:
                 return None
-            return samples, self._time_samples_display
+            return samples, self._time_axis_values_display
         if axis_type == AxisType.SAMPLE:
             if self._vertical_indices_in_data_region is None:
                 return None
@@ -677,35 +676,44 @@ class SeismicSubWindow(UASSubWindow):
 
     def _file_view_region_fit_to_window(self) -> None:
         """Reset view to show entire image fitted to window."""
-        if self._file_raw_data is None or self._image_ax is None:
+        display_data = self._processed_data
+        if display_data is None:
             return
-        nz, nx = self._file_raw_data.shape
-        pixels_shape = self._get_pixels_shape()
-        self._file_view_region = Bbox([[0, 0], [nx, nz]])
-        self._file_region_clipped = Bbox(self._file_view_region)
-        self._canvas_render_region = Bbox([[0, 0], [pixels_shape[1], pixels_shape[0]]])
-        self._canvas_buffer = np.empty(shape=pixels_shape, dtype=self._file_raw_data.dtype)
-        # without crop. only resize to allocated buffer.
-        # dsize is (width, height), opposite of numpy shape (height, width)
-        cv2.resize(self._file_raw_data, dsize=(pixels_shape[1], pixels_shape[0]), interpolation=cv2.INTER_LINEAR, dst=self._canvas_buffer)
+        nz, nx = display_data.shape
+        canvas_shape = self._get_pixels_shape()
+        try:
+            self._file_view_region = Bbox([[0, 0], [nx, nz]])
+            self._file_region_clipped = Bbox(self._file_view_region)
+            self._canvas_render_region = Bbox([[0, 0], [canvas_shape[1], canvas_shape[0]]])
+            self._canvas_buffer = np.empty(shape=canvas_shape, dtype=display_data.dtype)
+            # without crop. only resize to allocated buffer.
+            # dsize is (width, height), opposite of numpy shape (height, width)
+            cv2.resize(display_data, dsize=(canvas_shape[1], canvas_shape[0]), interpolation=cv2.INTER_LINEAR, dst=self._canvas_buffer)
+        except Exception as e:
+            self._show_error("Error", f"Failed to set file view region to fit to window: {e}")
+            self._file_view_region = None
+            self._file_region_clipped = None
+            self._canvas_render_region = None
+            self._canvas_buffer = None
 
 
     def _file_view_region_one_to_one_pixels(self) -> None:
         """Reset view to 1:1 pixel ratio (actual size), showing only part of image if needed."""
-        if self._file_raw_data is None or self._image_ax is None:
+        display_data = self._processed_data
+        if display_data is None:
             return
 
         # Calculate how many data pixels can fit in the canvas at 1:1 ratio
         # At 1:1, one data pixel = one screen pixel
         canvas_shape = self._get_pixels_shape()
-        data_shape = self._file_raw_data.shape
+        data_shape = display_data.shape
         render_shape = (min(data_shape[0], canvas_shape[0]), min(data_shape[1], canvas_shape[1]))
 
         self._file_view_region = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
         self._file_region_clipped = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
         self._canvas_render_region = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
-        self._canvas_buffer = np.zeros(shape=canvas_shape, dtype=self._file_raw_data.dtype)
-        self._canvas_buffer[:render_shape[0], :render_shape[1]] = self._file_raw_data[:render_shape[0], :render_shape[1]]
+        self._canvas_buffer = np.zeros(shape=canvas_shape, dtype=display_data.dtype)
+        self._canvas_buffer[:render_shape[0], :render_shape[1]] = display_data[:render_shape[0], :render_shape[1]]
 
 
     def _get_pixels_shape(self) -> tuple[int, int]:
@@ -760,9 +768,9 @@ class SeismicSubWindow(UASSubWindow):
 
     def _set_file_view_region(self, x0: float, y0: float, x1: float, y1: float) -> None:
         """Set the crop request."""
-        if self._file_raw_data is None:
+        if self._processed_data is None:
             return
-        file_shape = self._file_raw_data.shape
+        file_shape = self._processed_data.shape
 
         def fix_lim(lim0: float, lim1: float, shape: int) -> tuple[float, float]:
             if lim1 < lim0:
@@ -793,12 +801,15 @@ class SeismicSubWindow(UASSubWindow):
 
         self._file_view_region = Bbox([[int(x0), int(y0)], [int(x1), int(y1)]])
         self._file_region_clipped = Bbox([[max(0, int(x0)), max(0, int(y0))], [min(file_shape[1], int(x1)), min(file_shape[0], int(y1))]])
-
+        self._canvas_render_region = None
+        self._canvas_buffer = None
 
     def _check_canvas_buffer_shape(self) -> None:
         """Check if the canvas render region is valid."""
         pixels_shape = self._get_pixels_shape()
         if pixels_shape[0] < 1 or pixels_shape[1] < 1:
+            self._canvas_render_region = None
+            self._canvas_buffer = None
             return
         if self._canvas_buffer is not None and self._canvas_buffer.shape == pixels_shape:
             return
@@ -808,28 +819,36 @@ class SeismicSubWindow(UASSubWindow):
 
     def _recreate_canvas_buffer(self) -> None:
         """Resize the cropped data to the new size."""
-        if self._file_raw_data is None or self._file_region_clipped is None or self._file_view_region is None:
+        display_data = self._processed_data
+        if display_data is None or self._file_region_clipped is None or self._file_view_region is None:
+            self._canvas_render_region = None
+            self._canvas_buffer = None
             return
         request_width = self._file_view_region.x1 - self._file_view_region.x0
         request_height = self._file_view_region.y1 - self._file_view_region.y0
         pixels_shape = self._get_pixels_shape()
-        self._canvas_render_region = Bbox([
-            [int((self._file_region_clipped.x0 - self._file_view_region.x0)/request_width*pixels_shape[1]),
-             int((self._file_region_clipped.y0 - self._file_view_region.y0)/request_height*pixels_shape[0])],
-            [int((self._file_region_clipped.x1 - self._file_view_region.x0)/request_width*pixels_shape[1]),
-             int((self._file_region_clipped.y1 - self._file_view_region.y0)/request_height*pixels_shape[0])]
-            ])
-        display_crop = self._canvas_render_region
-        file_crop = self._file_region_clipped
-        self._canvas_buffer = np.zeros(shape=self._get_pixels_shape(), dtype=self._file_raw_data.dtype)
-        # dsize is (width, height), opposite of numpy shape (height, width)
-        dsize_width = int(display_crop.x1) - int(display_crop.x0)
-        dsize_height = int(display_crop.y1) - int(display_crop.y0)
-        cv2.resize(\
-            src=self._file_raw_data[int(file_crop.y0):int(file_crop.y1), int(file_crop.x0):int(file_crop.x1)],\
-            dsize=(dsize_width, dsize_height),\
-            interpolation=cv2.INTER_LINEAR,\
-            dst=self._canvas_buffer[int(display_crop.y0):int(display_crop.y1), int(display_crop.x0):int(display_crop.x1)])
+        try:
+            self._canvas_render_region = Bbox([
+                [int((self._file_region_clipped.x0 - self._file_view_region.x0)/request_width*pixels_shape[1]),
+                int((self._file_region_clipped.y0 - self._file_view_region.y0)/request_height*pixels_shape[0])],
+                [int((self._file_region_clipped.x1 - self._file_view_region.x0)/request_width*pixels_shape[1]),
+                int((self._file_region_clipped.y1 - self._file_view_region.y0)/request_height*pixels_shape[0])]
+                ])
+            self._canvas_buffer = np.zeros(shape=pixels_shape, dtype=display_data.dtype)
+            # dsize is (width, height), opposite of numpy shape (height, width)
+            display_crop = self._canvas_render_region
+            file_crop = self._file_region_clipped
+            dsize_width = int(display_crop.x1) - int(display_crop.x0)
+            dsize_height = int(display_crop.y1) - int(display_crop.y0)
+            cv2.resize(\
+                src=display_data[int(file_crop.y0):int(file_crop.y1), int(file_crop.x0):int(file_crop.x1)],\
+                dsize=(dsize_width, dsize_height),\
+                interpolation=cv2.INTER_LINEAR,\
+                dst=self._canvas_buffer[int(display_crop.y0):int(display_crop.y1), int(display_crop.x0):int(display_crop.x1)])
+        except Exception as e:
+            self._show_error("Error", f"Failed to recreate canvas buffer: {e}")
+            self._canvas_render_region = None
+            self._canvas_buffer = None
 
 
     @staticmethod
@@ -845,7 +864,18 @@ class SeismicSubWindow(UASSubWindow):
     @property
     def filename(self) -> str:
         """Get the loaded filename."""
-        return self._filename
+        return self._data_file.filename if self._data_file is not None else ""
+
+
+    @property
+    def raw_data(self) -> np.ndarray | None:
+        """Get the raw data from the loaded data file."""
+        return self._data_file.data if self._data_file is not None else None
+
+    @property
+    def time_interval_seconds(self) -> float:
+        """Get the time interval in seconds."""
+        return self._data_file.time_interval_seconds if self._data_file is not None else 1.0
 
 
     def _motion_notify_event(self, event) -> None:
@@ -912,6 +942,7 @@ class SeismicSubWindow(UASSubWindow):
         """
         data = self._canvas_buffer
         if data is None or self._canvas_render_region is None:
+            assert self.raw_data is None, f"The only time this should happen is when the file is not loaded: {(self._canvas_buffer is None)=}, {self._canvas_render_region=}" 
             return None
 
         hover_info = {}
@@ -937,7 +968,7 @@ class SeismicSubWindow(UASSubWindow):
             y_in_data_region = y - self._canvas_render_region.y0  # y is the pixel coordinate in the display
             ind_sample = simple_interpolation(self._vertical_indices_in_data_region, y_in_data_region)
             hover_info['sample_number'] = ind_sample
-            time_value = simple_interpolation(self._time_samples_display, y_in_data_region)
+            time_value = simple_interpolation(self._time_axis_values_display, y_in_data_region)
             hover_info['time_units'] = self._time_display_units
             hover_info['time_value'] = time_value
             depth_value = simple_interpolation(self._depth_converted_display, y_in_data_region)
@@ -953,7 +984,7 @@ class SeismicSubWindow(UASSubWindow):
     def serialize(self) -> dict[str, Any]:
         """Serialize subwindow state including loaded file and color scale."""
         state = super().serialize()
-        state['filename'] = self._filename
+        state['filename'] = self.filename
 
         # Convert AxisType enums to strings for JSON serialization
         serialized_settings = dict(self._display_settings)
@@ -962,13 +993,16 @@ class SeismicSubWindow(UASSubWindow):
                 serialized_settings[key] = serialized_settings[key].value
 
         state['display_settings'] = serialized_settings
+
+        # Serialize filter pipeline
+        state['filter_pipeline'] = self._filter_pipeline.serialize()
+
         return state
 
 
     def deserialize(self, state: dict[str, Any]) -> None:
         """Restore subwindow state including loaded file and color scale."""
         super().deserialize(state)
-        self.load_file(state.get("filename", ""))
         if 'display_settings' in state:
             settings = state['display_settings']
             # Convert string values back to AxisType enums
@@ -981,8 +1015,11 @@ class SeismicSubWindow(UASSubWindow):
                 except ValueError:
                     settings[key] = DisplaySettingsDialog.default_settings[key]
             self._display_settings = settings
-        self._update_first_arrival_sample(self._display_settings['ind_sample_time_first_arrival'])
-        self._calculate_depth_converted()
+
+        # Restore filter pipeline
+        if 'filter_pipeline' in state:
+            self._filter_pipeline.deserialize(state['filter_pipeline'])
+        self.load_file(state.get("filename", ""))
         self._resample_axis_values_4_display()
         self._apply_image_four_axes_tick_settings()
         self.canvas_render()
@@ -1043,80 +1080,56 @@ class SeismicSubWindow(UASSubWindow):
     def load_file_dialog(self) -> bool:
         """Load a seismic file (SEGY, rd3, or rd7)."""
         # Use directory of current file as default, or empty string if no file loaded
-        default_dir = ""
-        if self.filename:
-            default_dir = os.path.dirname(self.filename)
+        default_dir = os.path.dirname(self.filename)
 
-        filename, _ = QFileDialog.getOpenFileName(
+        new_filename, _ = QFileDialog.getOpenFileName(
             self,
             "Open Seismic File",
             default_dir,
             "Seismic Files (*.sgy *.segy *.rd3 *.rd7);;SEGY Files (*.sgy *.segy);;MALA Files (*.rd3 *.rd7);;All Files (*)",
         )
-        if not filename:
+        if not new_filename:
             return False
-        return self.load_file(filename)
+        return self.load_file(new_filename)
 
 
-    def load_file(self, filename: str) -> bool:
-        """Load a seismic file (SEGY, rd3, or rd7) into this subwindow."""
-        if not filename or not os.path.exists(filename) or not os.path.isfile(filename):
-            self._show_error("Error", f"Invalid file: {filename}")
+    def load_file(self, new_filename: str) -> bool:
+        new_data_file = DataFile(new_filename)
+        if not new_data_file.load():
+            self._show_error("Error", f"Failed to load file: {new_filename}\n{new_data_file.error}")
             return False
-        
-        file_ext = os.path.splitext(filename)[1].lower()
-
-        if file_ext in ['.rd3', '.rd7']:
-            file_type = file_ext[1:]
-        else:
-            file_type = 'sgy'
-        success = self.canvas_load_file(filename, file_type)
-        if success:
-            self.title = os.path.basename(filename)
-            self.update_status(f"Loaded: {filename}")
-        return success
-
-
-    def canvas_load_file(self, filename: str, file_type: str) -> bool:
-        if file_type not in ['sgy', 'rd3', 'rd7']:
-            self._show_error("Error", f"Invalid file type: {file_type}")
-            return False
-
-        if file_type == 'sgy':
-            ret, error_message = self._load_segy_data(filename)
-        else:
-            ret, error_message = self._load_mala_data(filename)
-
-        if not ret:
-            self._show_error("Error", f"Failed to load file: {filename}\n{error_message}")
-            self._remove_colorbar_indicator()
-            self._remove_colorbar()
-            self._trace_coords_meters = None
-            self._trace_cumulative_distances_meters = None
-            self._trace_time_delays_seconds = None
-            self._time_interval_seconds = 1.0
-            self._time_first_arrival_seconds = 0.0
-            self._time_samples_seconds = None
-            self._depth_converted = None
-            self._amplitude_min = 0.0
-            self._amplitude_max = 0.0
-            self._image = None
-            self._filename = ""
-            return False
-
-        self._filename = filename
-        # Calculate cumulative distances along the survey line
-        # Distance from trace i-1 to trace i for each trace
-        trace_distances_meters = np.sqrt(np.sum(np.diff(self._trace_coords_meters, axis=0)**2, axis=1))
-        # Cumulative sum with 0.0 prepended for first trace
-        self._trace_cumulative_distances_meters = np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
-
-        self._amplitude_min = float(np.min(self._file_raw_data))
-        self._amplitude_max = float(np.max(self._file_raw_data))
+        self._data_file = new_data_file
+        # clear previous file's cached data
+        self._processed_data = None
+        self._trace_cumulative_distances_meters = None
+        self._trace_cumulative_distances_display = None
+        self._time_first_arrival_seconds = 0.0
+        self._time_axis_values_seconds = None
+        self._file_view_region = None
+        self._file_region_clipped = None
+        self._canvas_render_region = None
+        self._canvas_buffer = None
+        self._depth_converted_meters = None
+        self._depth_converted_display = None
+        self._horizontal_indices_in_data_region = None
+        self._vertical_indices_in_data_region = None
+        self._amplitude_min = 0.0
+        self._amplitude_max = 0.0
+        self._image = None
+        self._display_settings['ind_sample_time_first_arrival'] = None
+        self._filter_pipeline.clear()
+        self._remove_colorbar_indicator()
+        self._remove_colorbar()
+        ############################################################
+        # complete load file
+        ############################################################
+        self._apply_filters() # apply filters to the data to get the processed data
+        self._trace_cumulative_distances_meters = self._data_file.trace_comulative_distances_meters()
 
         # Calculate time range in seconds
-        nt = self._file_raw_data.shape[0]
-        time_range_seconds = (nt - 1) * self._time_interval_seconds
+        dt_seconds = self._data_file.time_interval_seconds
+        nt = self.raw_data.shape[0]
+        time_range_seconds = (nt - 1) * dt_seconds
         if time_range_seconds < 0.01:
             # display time in nano seconds
             self._time_display_units = "ns"
@@ -1130,130 +1143,21 @@ class SeismicSubWindow(UASSubWindow):
             self._time_display_units = "s"
             self._time_display_value_factor = 1.0
 
-        self._trace_time_first_arrival_seconds = np.median(self._trace_time_delays_seconds)
+        self._time_first_arrival_seconds = self._data_file.time_delay_seconds
 
-        if self._trace_time_first_arrival_seconds < self._time_interval_seconds or self._trace_time_first_arrival_seconds >= time_range_seconds - self._time_interval_seconds:
+        if self._time_first_arrival_seconds < dt_seconds or self._time_first_arrival_seconds >= time_range_seconds - dt_seconds:
             # default to 10% of the data range
-            self._trace_time_first_arrival_seconds = time_range_seconds * 0.1
-
-        self._update_first_arrival_sample(int(self._trace_time_first_arrival_seconds / self._time_interval_seconds))
+            self._time_first_arrival_seconds = time_range_seconds * 0.1
+        
+        ind_sample_time_first_arrival = self._display_settings.get('ind_sample_time_first_arrival', None)
+        if ind_sample_time_first_arrival is None:
+            ind_sample_time_first_arrival = int(self._time_first_arrival_seconds / dt_seconds)
+        self._update_first_arrival_sample(ind_sample_time_first_arrival)
         self._calculate_depth_converted()
         self._set_view_file_region_by_mode() # creating the canvas buffer
+        self.update_status(f"Loaded: {self.filename}")
         self.canvas_render()
-        return ret
-
-
-    def _load_segy_data(self, filename: str) -> tuple[bool, str]:
-        try:
-            with segyio.open(filename, "r", ignore_geometry=True) as f:
-                self._file_raw_data = f.trace.raw[:].T
-                if self._file_raw_data is None or self._file_raw_data.size == 0:
-                    return False, "No data found in SEGY file"
-                # Extract metadata from SEGY file
-                # Sample interval from binary header (bytes 3217-3218, in microseconds per SEG-Y standard)
-                dt_us = float(f.bin[segyio.BinField.Interval])
-                if dt_us <= 0:
-                    return False, "Sample interval is not set in SEGY file"
-                self._time_interval_seconds = dt_us / 1_000_000.0  # Convert microseconds to seconds
-
-
-                # Try to extract trace coordinates from trace headers
-                num_traces = len(f.trace)
-                coords = np.full((num_traces, 2), fill_value=np.nan)
-
-                segy_coord_unit_map = {
-                    1: "length", # meters or feet
-                    2: "arcsec", # seconds of arc
-                    3: "deg", # decimal degrees
-                    4: "DMS", # degrees, minutes, seconds
-                }
-                segy_measurement_system_map = {
-                    1: UnitSystem.MKS,
-                    2: UnitSystem.IMPERIAL,
-                }
-                # Read measurement system from binary header (bytes 3255-3256)
-                measurement_system = f.bin[segyio.BinField.MeasurementSystem]
-                file_unit_system = segy_measurement_system_map.get(measurement_system, UnitSystem.MKS)
-                factor_length_2_mks = UnitSystem.convert_length_factor(file_unit_system, UnitSystem.MKS)
-                time_delays_seconds = np.full(num_traces, fill_value=np.nan)
-                trace_offset_meters = np.full(num_traces, fill_value=np.nan)
-                count_valid_coords = 0
-                for i in range(num_traces):
-                    trace_header = f.header[i]
-                    # DelayRecordingTime from trace header (bytes 109-110, in milliseconds per SEG-Y standard)
-                    delay_ms = trace_header[segyio.TraceField.DelayRecordingTime]
-                    if delay_ms > 0:
-                        time_delays_seconds[i] = delay_ms / 1000.0  # Convert milliseconds to seconds
-                    x, y = trace_header[segyio.TraceField.CDP_X], trace_header[segyio.TraceField.CDP_Y]
-                    if np.isnan(x) or np.isnan(y) or (x == 0 and y == 0):
-                        continue
-                    count_valid_coords += 1
-                    scalar = trace_header[segyio.TraceField.SourceGroupScalar]
-                    if scalar < 0:
-                        x /= abs(scalar)
-                        y /= abs(scalar)
-                    elif scalar > 0:
-                        x *= float(scalar)
-                        y *= float(scalar)
-                    else:
-                        # ignore scalar or treat it as 1.0
-                        pass
-                    coord_units = trace_header[segyio.TraceField.CoordinateUnits]
-                    if coord_units in segy_coord_unit_map:
-                        if segy_coord_unit_map[coord_units] == "length":
-                            x *= factor_length_2_mks
-                            y *= factor_length_2_mks
-                    coords[i] = [x, y]
-                    trace_offset_meters[i] = trace_header[segyio.TraceField.Offset] * factor_length_2_mks
-
-                if not count_valid_coords:
-                    return False, "No trace coordinates found in SEGY file"
-                interpolate_inplace_nan_values(coords)
-                interpolate_inplace_nan_values(time_delays_seconds)
-                interpolate_inplace_nan_values(trace_offset_meters)
-                self._trace_time_delays_seconds = time_delays_seconds
-                self._offset_meters = np.median(trace_offset_meters)
-                self._trace_coords_meters = coords
-        except Exception as e:
-            return False, f"Error loading SEGY file: {e}"
-
-        return True, ""
-
-
-    def _load_mala_data(self, filename: str) -> tuple[bool, str]:
-        try:
-            file_base, _ = os.path.splitext(filename)
-            data, info = readMALA(file_base)
-            self._file_raw_data = np.array(data)
-            nt, nx = self._file_raw_data.shape[0], self._file_raw_data.shape[1]
-
-            # Extract metadata from MALA header
-            # Calculate sample interval (dt) from TIMEWINDOW and SAMPLES
-            # TIMEWINDOW is in nanoseconds
-            timewindow_ns = float(info.get('TIMEWINDOW', 0))
-            if timewindow_ns > 0 and nt > 1:
-                dt_ns = timewindow_ns / (nt - 1)
-                self._time_interval_seconds = dt_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
-            else:
-                self._time_interval_seconds = 1.0
-
-            # Extract signal position (time zero offset) from MALA header
-            # SIGNAL POSITION is in nanoseconds
-            signal_position_ns = float(info.get('SIGNAL POSITION', 0))
-            self._trace_time_delays_seconds = np.full(nx, signal_position_ns / 1_000_000_000.0)  # Convert nanoseconds to seconds
-
-            # Distance interval from MALA header
-            distance_interval = float(info.get('DISTANCE INTERVAL', 0))
-            if distance_interval <= 0:
-                return False, "Distance interval is not set in MALA file"
-            # Create linear coordinates based on distance interval
-            x_coords = np.arange(nx) * distance_interval
-            self._trace_coords_meters = np.column_stack([x_coords, np.zeros(nx)])
-            self._offset_meters = info.get('OFFSET', 0)
-        except Exception as e:
-            return False, f"Error loading MALA file: {e}"
-
-        return True, ""
+        return True
 
 
     def _on_draw_complete(self, event) -> None:
@@ -1431,7 +1335,6 @@ class SeismicSubWindow(UASSubWindow):
             self._nav_toolbar.insertAction(next_action, filter_action)
 
             # Create custom separator using QFrame for full control
-            from PySide6.QtWidgets import QFrame, QSizePolicy
             sep_frame = QFrame()
             sep_frame.setFrameShape(QFrame.Shape.VLine)
             sep_frame.setFrameShadow(QFrame.Shadow.Plain)
@@ -1451,9 +1354,28 @@ class SeismicSubWindow(UASSubWindow):
 
 
     def _on_filters_clicked(self) -> None:
-        """Callback for filters button/menu - will create filters GUI in the future."""
-        # TODO: Implement filters dialog GUI
-        print("Filters clicked - GUI to be implemented")
+        """Open the filters dialog."""
+        dialog = FiltersDialog(self)
+        dialog.exec()
+
+
+    def _apply_filters(self) -> None:
+        """Apply filter pipeline and set the processed data."""
+        try:
+            # if raw_data is None, it will return None without raising an exception
+            self._processed_data = self._filter_pipeline.apply(self.raw_data, self.time_interval_seconds)
+        except Exception as e:
+            self._show_error("Error", f"Failed to apply filters: {e}")
+            return
+        self._file_region_clipped = None
+        self._canvas_render_region = None
+        self._canvas_buffer = None
+        if self._processed_data is None:
+            self._amplitude_min = 0.0
+            self._amplitude_max = 0.0
+            return
+        self._amplitude_min = float(np.min(self._processed_data))
+        self._amplitude_max = float(np.max(self._processed_data))
 
 
     def _replace_configure_subplots_action(self) -> None:
@@ -1587,7 +1509,7 @@ class SeismicSubWindow(UASSubWindow):
             set_value = self._display_settings['file_name_in_plot']
 
         if set_value:
-            self._image_ax.set_title(os.path.basename(self._filename))
+            self._image_ax.set_title(os.path.basename(self.filename))
         else:
             self._image_ax.set_title("")
 
@@ -1601,8 +1523,6 @@ class SeismicSubWindow(UASSubWindow):
         # Secondary axes are created by secondary_xaxis()/secondary_yaxis() calls,
         # which create NEW axes objects each time, so old ones must be removed first.
         if self._image_ax is None or self._image_ax.figure is not self._fig:
-            return
-        if self._image_ax.figure is not self._fig:
             return
         if hasattr(self._image_ax, 'child_axes'):
             for child_ax in self._image_ax.child_axes[:]:  # [:] creates copy while iterating
@@ -1674,13 +1594,9 @@ class SeismicSubWindow(UASSubWindow):
     def _remove_colorbar_ax(self) -> None:
         self._remove_colorbar()
         #check if colorbar_ax is defined, if so, remove it
-        if not hasattr(self, '_colorbar_ax'):
-            self._colorbar_ax = None
-            return
-        if self._colorbar_ax is None:
-            return
-        if self._colorbar_ax.figure is self._fig and self._colorbar_ax in self._fig.axes:
-            self._colorbar_ax.remove()
+        if hasattr(self, '_colorbar_ax') and self._colorbar_ax is not None:
+            if self._colorbar_ax.figure is self._fig and self._colorbar_ax in self._fig.axes:
+                self._colorbar_ax.remove()
         self._colorbar_ax = None
 
 
@@ -1716,7 +1632,6 @@ class SeismicSubWindow(UASSubWindow):
             colorbar_ticks = colorbar_ticks[:-1]
         colorbar_ticks = [self._amplitude_min] + colorbar_ticks + [self._amplitude_max]
         self._colorbar.set_ticks(colorbar_ticks)
-        self._create_colorbar_indicator(self._colorbar_indicator_amplitude)
 
 
     def _create_colorbar_indicator(self, amplitude: float|None) -> None:
@@ -1733,12 +1648,11 @@ class SeismicSubWindow(UASSubWindow):
         inv_color = (1.0 - rgba[0], 1.0 - rgba[1], 1.0 - rgba[2])
 
         self._colorbar_indicator = self._colorbar.ax.axhline(y=amplitude, color=inv_color, linewidth=2, alpha=1.0)
-        self._colorbar_indicator_amplitude = amplitude
 
 
     def _remove_colorbar_indicator(self) -> None:
         if self._colorbar_indicator is None:
-            return        
+            return
         self._colorbar_indicator.set_visible(False)
         self._colorbar_indicator = None
 
@@ -1815,12 +1729,15 @@ class SeismicSubWindow(UASSubWindow):
         return self._display_settings['ind_sample_time_first_arrival'] # updated value
 
 
-    def _update_first_arrival_sample(self, ind_sample_time_first_arrival: int) -> None:
-        nt = self._file_raw_data.shape[0]
+    def _update_first_arrival_sample(self, ind_sample_time_first_arrival: int|None) -> None:
+        nt = self.raw_data.shape[0]
+        if ind_sample_time_first_arrival is None:
+            ind_sample_time_first_arrival = self._display_settings['ind_sample_time_first_arrival']
         ind_sample_time_first_arrival = max(0,min(ind_sample_time_first_arrival, nt - 1))
-        self._time_first_arrival_seconds = ind_sample_time_first_arrival * self._time_interval_seconds
+        dt_seconds = self.time_interval_seconds
+        self._time_first_arrival_seconds = ind_sample_time_first_arrival * dt_seconds
         self._display_settings['ind_sample_time_first_arrival'] = ind_sample_time_first_arrival
-        self._time_samples_seconds = np.arange(nt) * self._time_interval_seconds - self._time_first_arrival_seconds
+        self._time_axis_values_seconds = np.arange(nt) * dt_seconds - self._time_first_arrival_seconds
 
 
     def _calculate_depth_converted(self) -> None:
@@ -1834,31 +1751,31 @@ class SeismicSubWindow(UASSubWindow):
         - Two-way time: t = 2L/v
         - Solving for depth: d = sqrt((v*t/2)² - (offset/2)²)
         """
-        assert self._time_samples_seconds is not None
+        assert self._time_axis_values_seconds is not None
         air_velocity_m_per_s = min(self._display_settings['air_velocity_m_per_s'], C_VACUUM)
         ground_velocity_m_per_s = min(self._display_settings['ground_velocity_m_per_s'], C_VACUUM)
-        ind_sample_time_first_arrival = min(self._display_settings['ind_sample_time_first_arrival'], len(self._time_samples_seconds) - 1)
-        n_time_samples = len(self._time_samples_seconds)
+        ind_sample_time_first_arrival = min(self._display_settings['ind_sample_time_first_arrival'], len(self._time_axis_values_seconds) - 1)
+        n_time_samples = len(self._time_axis_values_seconds)
         critical_time = self._offset_meters / ground_velocity_m_per_s
         half_offset = 0.5 * self._offset_meters
-        self._depth_converted = np.empty_like(self._time_samples_seconds)
+        self._depth_converted_meters = np.empty_like(self._time_axis_values_seconds)
         ind_sample_critical_time = ind_sample_time_first_arrival
-        while ind_sample_critical_time < n_time_samples and self._time_samples_seconds[ind_sample_critical_time] < critical_time:
+        while ind_sample_critical_time < n_time_samples and self._time_axis_values_seconds[ind_sample_critical_time] < critical_time:
             ind_sample_critical_time += 1
         # Above surface (negative time): antenna height above ground
         # Uses air velocity for propagation before first arrival
-        self._depth_converted[:ind_sample_time_first_arrival] = \
-            self._time_samples_seconds[:ind_sample_time_first_arrival] * air_velocity_m_per_s
+        self._depth_converted_meters[:ind_sample_time_first_arrival] = \
+            self._time_axis_values_seconds[:ind_sample_time_first_arrival] * air_velocity_m_per_s
 
         # Below surface: geometric correction for bistatic antenna configuration
         # Signal travels diagonally from Tx to reflector to Rx
-        extra_time = (ind_sample_critical_time - ind_sample_time_first_arrival) * self._time_interval_seconds
-        two_way_time = self._time_samples_seconds[ind_sample_time_first_arrival:] + extra_time
+        extra_time = (ind_sample_critical_time - ind_sample_time_first_arrival) * self.time_interval_seconds
+        two_way_time = self._time_axis_values_seconds[ind_sample_time_first_arrival:] + extra_time
         slant_distance = (two_way_time * ground_velocity_m_per_s) / 2
 
         # For near-surface where slant_distance < half_offset (geometrically impossible),
         # clip to zero depth. This handles the "direct wave zone" near the surface.
-        self._depth_converted[ind_sample_time_first_arrival:] = np.sqrt(np.maximum(slant_distance**2 - half_offset**2, 0))
+        self._depth_converted_meters[ind_sample_time_first_arrival:] = np.sqrt(np.maximum(slant_distance**2 - half_offset**2, 0))
 
 
     def _resample_axis_values_4_display(self) -> None:
@@ -1885,8 +1802,8 @@ class SeismicSubWindow(UASSubWindow):
             pixel_ind1=int(render_region.x1),\
             display_factor=GlobalSettings.display_length_factor
         )
-        self._time_samples_display = resample_axis_values_to_display(\
-            axis_values=self._time_samples_seconds,\
+        self._time_axis_values_display = resample_axis_values_to_display(\
+            axis_values=self._time_axis_values_seconds,\
             file_ind0=int(crop_response.y0),\
             file_ind1=int(crop_response.y1),\
             pixel_ind0=int(render_region.y0),\
@@ -1894,7 +1811,7 @@ class SeismicSubWindow(UASSubWindow):
             display_factor=self._time_display_value_factor
         )
         self._depth_converted_display = resample_axis_values_to_display(\
-            axis_values=self._depth_converted,\
+            axis_values=self._depth_converted_meters,\
             file_ind0=int(crop_response.y0),\
             file_ind1=int(crop_response.y1),\
             pixel_ind0=int(render_region.y0),\
@@ -1902,7 +1819,7 @@ class SeismicSubWindow(UASSubWindow):
             display_factor=GlobalSettings.display_length_factor
         )
         self._horizontal_indices_in_data_region = resample_axis_values_to_display(\
-            axis_values=np.arange(self._file_raw_data.shape[1], dtype=int),\
+            axis_values=np.arange(self.raw_data.shape[1], dtype=int),\
             file_ind0=int(crop_response.x0),\
             file_ind1=int(crop_response.x1),\
             pixel_ind0=int(render_region.x0),\
@@ -1910,7 +1827,7 @@ class SeismicSubWindow(UASSubWindow):
             display_factor=1.0
         )
         self._vertical_indices_in_data_region = resample_axis_values_to_display(\
-            axis_values=np.arange(self._file_raw_data.shape[0], dtype=int),\
+            axis_values=np.arange(self.raw_data.shape[0], dtype=int),\
             file_ind0=int(crop_response.y0),\
             file_ind1=int(crop_response.y1),\
             pixel_ind0=int(render_region.y0),\
@@ -1935,15 +1852,13 @@ class SeismicSubWindow(UASSubWindow):
         Save current data to a file.
 
         """
-        if self._file_raw_data is None:
+        if self._processed_data is None:
             self._show_error("Error", "No data to save")
             return
-
+        data_2_save = self._processed_data.astype(np.float32)
         while True:
             # Create default filename by concatenating current filename with .file_type
-            default_name = ""
-            if self.filename:
-                default_name = self.filename + '.' + file_type
+            default_name = os.path.basename(self.filename) + '.' + file_type
             label = ''
             filter = ''
             if file_type == 'sgy':
@@ -1959,45 +1874,24 @@ class SeismicSubWindow(UASSubWindow):
                 self._show_error("Error", f"Invalid file type: {file_type}")
                 return
 
-            filename, _ = QFileDialog.getSaveFileName(self, f"Save as {label} File", default_name, f"{label} Files ({filter});;All Files (*)")
-            if not filename:
+            new_filename, _ = QFileDialog.getSaveFileName(self, f"Save as {label} File", default_name, f"{label} Files ({filter});;All Files (*)")
+            if not new_filename:
                 # User cancelled
                 return
 
-            try:
-                if file_type == 'sgy':
-                    # Create a minimal SEGY file with current data
-                    spec = segyio.spec()
-                    spec.samples = range(self._file_raw_data.shape[0])
-                    spec.tracecount = self._file_raw_data.shape[1]
-                    spec.format = 1  # 4-byte IBM float
-
-                    with segyio.create(filename, spec) as f:
-                        for i, trace in enumerate(self._file_raw_data.T):
-                            f.trace[i] = trace
-                else: # rd3 or rd7
-                    file_base, _ = os.path.splitext(filename)
-                    data_file = file_base + '.' + file_type
-
-                    if file_type == 'rd3':
-                        data_normalized = self._file_raw_data / np.max(np.abs(self._file_raw_data))
-                        data_int16 = (data_normalized * 32767).astype(np.int16)
-
-                        # Save binary data
-                        data_int16.T.tofile(data_file)
-                    else:
-                        data_float32 = self._file_raw_data.astype(np.float32)
-                        data_float32.T.tofile(data_file)
-                QMessageBox.information(self, "Success", f"Saved to {filename}")
+            new_data_file = DataFile(new_filename)
+            new_data_file.data = data_2_save
+            if new_data_file.save():
+                QMessageBox.information(self, "Success", f"Saved to {new_filename}")
                 break
-            except Exception as e:
-                action = self._show_save_error_dialog(str(e), label)
-                if action == 'cancel':
-                    break
-                if action == 'change_format':
-                    # Show save format menu
-                    self._show_save_format_menu()
-
+            
+            action = self._show_save_error_dialog(f"Failed to save file: {new_filename}\n{new_data_file.error}", label)
+            if action == 'cancel':
+                break
+            if action == 'change_format':
+                # Show save format menu
+                self._show_save_format_menu()
+            # default to retry --> continue
 
 
     def _show_save_error_dialog(self, error_msg: str, format_type: str) -> str:
@@ -2023,8 +1917,10 @@ class SeismicSubWindow(UASSubWindow):
             return 'retry'
         elif clicked == change_format_btn:
             return 'change_format'
-        else:
+        elif clicked == cancel_btn:
             return 'cancel'
+        else:
+            return 'unknown'
 
 
 
