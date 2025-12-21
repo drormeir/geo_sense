@@ -171,6 +171,40 @@ class BaseFilter(ABC):
         """Return display name for UI."""
         return f"{cls.category} - {cls.filter_name}"
 
+    @classmethod
+    def describe(cls) -> str:
+        """Return a description of the filter and all its parameters."""
+        lines = [
+            f"{cls.filter_name} ({cls.category})",
+            f"  {cls.description}",
+            "",
+            "  Parameters:",
+        ]
+        for spec in cls.parameter_specs:
+            # Build parameter info line
+            param_line = f"    {spec.display_name} ({spec.name}): {spec.param_type.value}"
+            if spec.units:
+                param_line += f" [{spec.units}]"
+            lines.append(param_line)
+
+            # Add range info if applicable
+            if spec.min_value is not None or spec.max_value is not None:
+                range_parts = []
+                if spec.min_value is not None:
+                    range_parts.append(f"min={spec.min_value}")
+                if spec.max_value is not None:
+                    range_parts.append(f"max={spec.max_value}")
+                lines.append(f"      Range: {', '.join(range_parts)}")
+
+            # Add default value
+            lines.append(f"      Default: {spec.default}")
+
+            # Add tooltip/description if present
+            if spec.tooltip:
+                lines.append(f"      {spec.tooltip}")
+
+        return "\n".join(lines)
+
     @abstractmethod
     def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:
         """

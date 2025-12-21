@@ -42,13 +42,21 @@ class FilterRegistry:
         cls._instance = None
 
     def register(self, filter_class: Type[BaseFilter]) -> None:
-        """Register a filter class."""
+        """Register a filter class.
+
+        Args:
+            filter_class: The filter class to register
+        """
         category = filter_class.category
         filter_name = filter_class.filter_name
 
         # Check global uniqueness of filter_name
         if filter_name in self._by_name:
-            raise ValueError(f"Filter '{filter_name}' already registered")
+            existing = self._by_name[filter_name]
+            # Allow re-registration when running module with -m (new class has __main__ module)
+            if existing.__name__ == filter_class.__name__ and filter_class.__module__ == "__main__":
+                return
+            raise ValueError(f"Filter '{filter_name}' already registered by {existing.__module__}.{existing.__name__}")
 
         # Add to category structure
         if category not in self._by_category:
