@@ -136,37 +136,108 @@ class OrmsbyFilter(BaseFilter):
         return result
 
 
-def _test():
+def _demo() -> None:
     """
-    Test the Ormsby filter registration and creation.
+    Visual demonstration of the Ormsby filter.
 
     Usage:
         python -W ignore::RuntimeWarning -m filters.frequency.ormsby
 
-    Expected output:
-        Frequency filters: ['Bandpass', 'Ormsby']
-        Created filter: Ormsby
-        Parameters: {'f1': 5.0, 'f2': 10.0, 'f3': 60.0, 'f4': 80.0}
-        Filter applied successfully, output shape: (100, 10)
+    Creates synthetic data with multiple frequency components and shows
+    before/after comparison in time and frequency domains.
     """
-    from filters import FilterRegistry
+    import matplotlib.pyplot as plt
 
-    # Get registry and list available frequency filters
-    registry = FilterRegistry.get_instance()
-    print("Frequency filters:", registry.get_filter_names("Frequency"))
+    # Print filter description
+    print(OrmsbyFilter.describe())
+    print()
 
-    # Create an Ormsby filter instance with default parameters
-    ormsby = registry.create_filter("Ormsby")
-    print("Created filter:", ormsby.filter_name)
-    print("Parameters:", ormsby.parameters)
+    # === Create synthetic data ===
+    sample_interval = 0.001  # 1 ms (1000 Hz sampling rate)
+    duration = 0.5  # 500 ms
+    n_samples = int(duration / sample_interval)
+    t = np.arange(n_samples) * sample_interval
 
-    # Test applying the filter to synthetic data
-    test_data = np.random.randn(100, 10).astype(np.float32)  # 100 samples, 10 traces
-    sample_interval = 0.001  # 1 ms sample interval (1000 Hz sampling rate)
+    # Composite signal with multiple frequencies:
+    # - 5 Hz (below passband - will be attenuated)
+    # - 30 Hz (in passband - will pass)
+    # - 50 Hz (in passband - will pass)
+    # - 150 Hz (above passband - will be attenuated)
+    signal = (
+        1.0 * np.sin(2 * np.pi * 5 * t) +    # Low frequency noise
+        2.0 * np.sin(2 * np.pi * 30 * t) +   # Signal component 1
+        1.5 * np.sin(2 * np.pi * 50 * t) +   # Signal component 2
+        0.8 * np.sin(2 * np.pi * 150 * t)    # High frequency noise
+    )
 
-    result = ormsby.apply(test_data, sample_interval)
-    print("Filter applied successfully, output shape:", result.shape)
+    # Reshape to 2D (samples x traces) - single trace
+    data = signal.reshape(-1, 1).astype(np.float32)
+
+    # === Apply Ormsby filter ===
+    # Passband: 10-80 Hz (default parameters)
+    ormsby = OrmsbyFilter()
+    filtered_data = ormsby.apply(data, sample_interval)
+
+    # === Compute frequency spectra ===
+    freqs = np.abs(fftfreq(n_samples, d=sample_interval))
+    original_spectrum = np.abs(fft(data[:, 0]))
+    filtered_spectrum = np.abs(fft(filtered_data[:, 0]))
+
+    # Build filter response for display
+    f1, f2, f3, f4 = 5.0, 10.0, 60.0, 80.0  # default params
+    response = np.zeros(n_samples)
+    response[(freqs >= f2) & (freqs <= f3)] = 1.0
+    low_ramp = (freqs >= f1) & (freqs < f2)
+    response[low_ramp] = (freqs[low_ramp] - f1) / (f2 - f1)
+    high_ramp = (freqs > f3) & (freqs <= f4)
+    response[high_ramp] = (f4 - freqs[high_ramp]) / (f4 - f3)
+
+    # === Plot ===
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle("Ormsby Bandpass Filter Demo (F1=5, F2=10, F3=60, F4=80 Hz)")
+
+    # Top-left: Original signal (time domain)
+    axes[0, 0].plot(t * 1000, data[:, 0], "b-", linewidth=0.8)
+    axes[0, 0].set_title("Original Signal")
+    axes[0, 0].set_xlabel("Time (ms)")
+    axes[0, 0].set_ylabel("Amplitude")
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # Top-right: Filtered signal (time domain)
+    axes[0, 1].plot(t * 1000, filtered_data[:, 0], "g-", linewidth=0.8)
+    axes[0, 1].set_title("Filtered Signal")
+    axes[0, 1].set_xlabel("Time (ms)")
+    axes[0, 1].set_ylabel("Amplitude")
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Bottom-left: Original spectrum (frequency domain)
+    max_freq = 200  # Show up to 200 Hz
+    freq_mask = freqs <= max_freq
+    axes[1, 0].plot(freqs[freq_mask], original_spectrum[freq_mask], "b-", linewidth=0.8)
+    axes[1, 0].axvline(x=5, color="r", linestyle="--", alpha=0.5, label="5 Hz")
+    axes[1, 0].axvline(x=30, color="g", linestyle="--", alpha=0.5, label="30 Hz")
+    axes[1, 0].axvline(x=50, color="g", linestyle="--", alpha=0.5, label="50 Hz")
+    axes[1, 0].axvline(x=150, color="r", linestyle="--", alpha=0.5, label="150 Hz")
+    axes[1, 0].set_title("Original Spectrum")
+    axes[1, 0].set_xlabel("Frequency (Hz)")
+    axes[1, 0].set_ylabel("Magnitude")
+    axes[1, 0].legend(fontsize=8)
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # Bottom-right: Filtered spectrum + filter response
+    ax2 = axes[1, 1].twinx()
+    axes[1, 1].plot(freqs[freq_mask], filtered_spectrum[freq_mask], "g-", linewidth=0.8, label="Filtered")
+    ax2.plot(freqs[freq_mask], response[freq_mask], "r-", linewidth=1.5, alpha=0.7, label="Filter Response")
+    ax2.set_ylim(0, 1.2)
+    ax2.set_ylabel("Filter Response", color="r")
+    axes[1, 1].set_title("Filtered Spectrum + Filter Response")
+    axes[1, 1].set_xlabel("Frequency (Hz)")
+    axes[1, 1].set_ylabel("Magnitude", color="g")
+    axes[1, 1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
-    _test()
+    _demo()
