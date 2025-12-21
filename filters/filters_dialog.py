@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QGroupBox, QListWidget, QListWidgetItem,
     QPushButton, QDialogButtonBox, QSpinBox, QDoubleSpinBox,
-    QCheckBox, QLineEdit, QLabel, QWidget,
+    QCheckBox, QLineEdit, QLabel, QWidget, QPlainTextEdit,
 )
 from PySide6.QtCore import Qt
 
@@ -96,8 +96,19 @@ class FiltersDialog(QDialog):
         self._add_button.clicked.connect(self._on_add_filter)
         selection_layout.addWidget(self._add_button)
 
+        # Description button
+        self._desc_button = QPushButton("Description...")
+        self._desc_button.clicked.connect(self._on_show_description)
+        selection_layout.addWidget(self._desc_button)
+
         selection_group.setLayout(selection_layout)
         layout.addWidget(selection_group)
+
+        # === Filter Description ===
+        self._description_label = QLabel()
+        self._description_label.setWordWrap(True)
+        self._description_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+        layout.addWidget(self._description_label)
 
         # === Parameters Group ===
         self._params_group = QGroupBox("Parameters")
@@ -180,14 +191,17 @@ class FiltersDialog(QDialog):
         """Update parameter widgets when filter selection changes."""
         if not filter_name:
             self._current_filter_class = None
+            self._description_label.setText("")
             self._clear_param_widgets()
             return
 
         try:
             self._current_filter_class = self._registry.get_filter_class(filter_name)
+            self._description_label.setText(self._current_filter_class.description)
             self._rebuild_param_widgets()
         except KeyError:
             self._current_filter_class = None
+            self._description_label.setText("")
             self._clear_param_widgets()
 
     def _clear_param_widgets(self) -> None:
@@ -297,6 +311,31 @@ class FiltersDialog(QDialog):
         self._pipeline.add_filter(new_filter)
         self._update_pipeline_list()
 
+    def _on_show_description(self) -> None:
+        """Show full filter description in a popup dialog."""
+        if self._current_filter_class is None:
+            return
+
+        description_text = self._current_filter_class.describe()
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{self._current_filter_class.filter_name} - Description")
+        dialog.setMinimumSize(450, 300)
+
+        layout = QVBoxLayout(dialog)
+
+        text_edit = QPlainTextEdit()
+        text_edit.setPlainText(description_text)
+        text_edit.setReadOnly(True)
+        text_edit.setStyleSheet("font-family: monospace;")
+        layout.addWidget(text_edit)
+
+        ok_button = QPushButton("Ok")
+        ok_button.clicked.connect(dialog.accept)
+        layout.addWidget(ok_button, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        dialog.exec()
+
     def _update_pipeline_list(self) -> None:
         """Refresh the pipeline list widget."""
         self._pipeline_list.clear()
@@ -368,6 +407,7 @@ class FiltersDialog(QDialog):
         has_filter_types = self._category_combo.count() > 0
 
         self._add_button.setEnabled(has_filter_types)
+        self._desc_button.setEnabled(self._current_filter_class is not None)
         self._move_up_btn.setEnabled(has_selection)
         self._move_down_btn.setEnabled(has_selection)
         self._remove_btn.setEnabled(has_selection)
