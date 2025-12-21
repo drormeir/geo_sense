@@ -16,6 +16,7 @@ from .filters_dialog import FiltersDialog
 # Import filter modules to trigger registration
 from . import frequency
 from . import amplitude
+from . import spatial
 
 __all__ = [
     "BaseFilter",
