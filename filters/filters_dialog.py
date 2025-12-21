@@ -53,8 +53,7 @@ class FiltersDialog(QDialog):
 
         # Copy of pipeline for editing (don't modify original until OK/Apply)
         self._pipeline = FilterPipeline()
-        if hasattr(parent, '_filter_pipeline'):
-            self._pipeline.deserialize(parent._filter_pipeline.serialize())
+        self._pipeline.deserialize(parent._filter_pipeline.serialize())
 
         # Store original pipeline state for cancel
         self._original_pipeline_state = self._pipeline.serialize()
@@ -476,10 +475,7 @@ class FiltersDialog(QDialog):
 
     def _apply_to_parent(self) -> None:
         """Apply current pipeline to parent's data."""
-        if hasattr(self._parent, '_filter_pipeline'):
-            self._parent._filter_pipeline.deserialize(self._pipeline.serialize())
-        if hasattr(self._parent, '_apply_filters_and_render'):
-            self._parent._apply_filters_and_render()
+        self._parent._apply_filters_and_render(self._pipeline.serialize())
 
     def _on_apply(self) -> None:
         """Apply current pipeline to seismic data (live preview)."""
@@ -493,8 +489,5 @@ class FiltersDialog(QDialog):
     def _on_cancel(self) -> None:
         """Cancel changes and close dialog."""
         # Restore original pipeline
-        if hasattr(self._parent, '_filter_pipeline'):
-            self._parent._filter_pipeline.deserialize(self._original_pipeline_state)
-        if hasattr(self._parent, '_apply_filters_and_render'):
-            self._parent._apply_filters_and_render()
+        self._parent._apply_filters_and_render(self._original_pipeline_state)
         self.reject()

@@ -660,6 +660,7 @@ class SeismicSubWindow(UASSubWindow):
         if self._image is None or self._canvas_buffer is None:
             return
         self._image.set_data(self._canvas_buffer)
+        self._image.set_clim(vmin=self._amplitude_min, vmax=self._amplitude_max)
         self._apply_image_four_axes_tick_settings()
         self._canvas.draw() # force draw
 
@@ -1385,6 +1386,16 @@ class SeismicSubWindow(UASSubWindow):
         self._amplitude_min = float(np.min(self._processed_data))
         self._amplitude_max = float(np.max(self._processed_data))
 
+    def _apply_filters_and_render(self, pipeline_state: list) -> None:
+        """Apply filter pipeline and update the display.
+
+        Args:
+            pipeline_state: Serialized pipeline state to apply (list of filter dicts)
+        """
+        self._filter_pipeline.deserialize(pipeline_state)
+        self._apply_filters()
+        self._set_view_file_region_by_mode()
+        self._set_canvas_to_image()
 
     def _replace_configure_subplots_action(self) -> None:
         """Replace the 'Configure subplots' toolbar button with Display Settings."""
