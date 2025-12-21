@@ -172,129 +172,147 @@ class OrmsbyFilter(BaseFilter):
 
         return result
 
+    @classmethod
+    def demo(cls) -> None:
+        """
+        Visual demonstration of the Ormsby filter.
 
-def _demo() -> None:
-    """
-    Visual demonstration of the Ormsby filter.
+        Creates synthetic data with multiple frequency components and shows
+        before/after comparison with different taper functions.
+        """
+        # === Create synthetic data ===
+        sample_interval = 0.001  # 1 ms (1000 Hz sampling rate)
+        duration = 0.5  # 500 ms
+        n_samples = int(duration / sample_interval)
+        t = np.arange(n_samples) * sample_interval
+        t_ms = t * 1000
 
-    Usage:
-        python -W ignore::RuntimeWarning -m filters.frequency.ormsby
+        # Composite signal with multiple frequencies
+        signal = (
+            1.0 * np.sin(2 * np.pi * 5 * t) +    # Low frequency noise
+            2.0 * np.sin(2 * np.pi * 30 * t) +   # Signal component 1
+            1.5 * np.sin(2 * np.pi * 50 * t) +   # Signal component 2
+            0.8 * np.sin(2 * np.pi * 150 * t)    # High frequency noise
+        )
 
-    Creates synthetic data with multiple frequency components and shows
-    before/after comparison with different taper functions.
-    """
-    import matplotlib.pyplot as plt
+        # Reshape to 2D (samples x traces) - single trace
+        data = signal.reshape(-1, 1).astype(np.float32)
 
-    # Print filter description
-    print(OrmsbyFilter.describe())
-    print()
+        # Filter parameters
+        f1, f2, f3, f4 = 5.0, 10.0, 60.0, 80.0
 
-    # === Create synthetic data ===
-    sample_interval = 0.001  # 1 ms (1000 Hz sampling rate)
-    duration = 0.5  # 500 ms
-    n_samples = int(duration / sample_interval)
-    t = np.arange(n_samples) * sample_interval
+        # === Build filter responses for all taper types ===
+        freqs = np.abs(fftfreq(n_samples, d=sample_interval))
+        taper_types = ["linear", "cos2", "hamming", "blackman"]
+        taper_labels = ["Linear", "Cos²", "Hamming", "Blackman"]
+        taper_colors = ["blue", "green", "orange", "red"]
+        responses = {}
 
-    # Composite signal with multiple frequencies
-    signal = (
-        1.0 * np.sin(2 * np.pi * 5 * t) +    # Low frequency noise
-        2.0 * np.sin(2 * np.pi * 30 * t) +   # Signal component 1
-        1.5 * np.sin(2 * np.pi * 50 * t) +   # Signal component 2
-        0.8 * np.sin(2 * np.pi * 150 * t)    # High frequency noise
-    )
+        for taper in taper_types:
+            response = np.zeros(n_samples)
+            response[(freqs >= f2) & (freqs <= f3)] = 1.0
 
-    # Reshape to 2D (samples x traces) - single trace
-    data = signal.reshape(-1, 1).astype(np.float32)
+            low_ramp = (freqs >= f1) & (freqs < f2)
+            if f2 > f1:
+                x_norm = (freqs[low_ramp] - f1) / (f2 - f1)
+                response[low_ramp] = cls._apply_taper(x_norm, taper)
 
-    # Filter parameters
-    f1, f2, f3, f4 = 5.0, 10.0, 60.0, 80.0
+            high_ramp = (freqs > f3) & (freqs <= f4)
+            if f4 > f3:
+                x_norm = (f4 - freqs[high_ramp]) / (f4 - f3)
+                response[high_ramp] = cls._apply_taper(x_norm, taper)
 
-    # === Build filter responses for all taper types ===
-    freqs = np.abs(fftfreq(n_samples, d=sample_interval))
-    taper_types = ["linear", "cos2", "hamming", "blackman"]
-    taper_colors = ["blue", "green", "orange", "red"]
-    responses = {}
+            responses[taper] = response
 
-    for taper in taper_types:
-        response = np.zeros(n_samples)
-        response[(freqs >= f2) & (freqs <= f3)] = 1.0
+        # === Apply Ormsby filter with cos2 taper (default) ===
+        ormsby = cls()
+        filtered_data = ormsby.apply(data, sample_interval)
 
-        low_ramp = (freqs >= f1) & (freqs < f2)
-        if f2 > f1:
-            x_norm = (freqs[low_ramp] - f1) / (f2 - f1)
-            response[low_ramp] = OrmsbyFilter._apply_taper(x_norm, taper)
+        # === Compute spectra ===
+        original_spectrum = np.abs(fft(data[:, 0]))
+        filtered_spectrum = np.abs(fft(filtered_data[:, 0]))
 
-        high_ramp = (freqs > f3) & (freqs <= f4)
-        if f4 > f3:
-            x_norm = (f4 - freqs[high_ramp]) / (f4 - f3)
-            response[high_ramp] = OrmsbyFilter._apply_taper(x_norm, taper)
+        # Normalize spectra for comparison
+        max_spectrum = max(np.max(original_spectrum), 1e-10)
+        original_norm = original_spectrum / max_spectrum
+        filtered_norm = filtered_spectrum / max_spectrum
 
-        responses[taper] = response
+        # === Build subplot specifications ===
+        trans_mask = (freqs >= 0) & (freqs <= 100)
+        max_freq = 200
+        freq_mask = freqs <= max_freq
 
-    # === Apply Ormsby filter with cos2 taper (default) ===
-    ormsby = OrmsbyFilter()
-    filtered_data = ormsby.apply(data, sample_interval)
+        # Build taper comparison lines
+        taper_lines = [
+            {'x': freqs[trans_mask], 'y': responses[t][trans_mask],
+             'color': c, 'linewidth': 1.5, 'label': l}
+            for t, l, c in zip(taper_types, taper_labels, taper_colors)
+        ]
 
-    # === Compute spectra ===
-    original_spectrum = np.abs(fft(data[:, 0]))
-    filtered_spectrum = np.abs(fft(filtered_data[:, 0]))
+        # Build spectrum comparison lines (normalized)
+        spectrum_lines = [
+            {'x': freqs[freq_mask], 'y': original_norm[freq_mask], 'color': 'b',
+             'linewidth': 0.8, 'alpha': 0.5, 'label': "Original"},
+            {'x': freqs[freq_mask], 'y': filtered_norm[freq_mask], 'color': 'g',
+             'linewidth': 0.8, 'label': "Filtered (cos²)"},
+            {'x': freqs[freq_mask], 'y': responses["cos2"][freq_mask], 'color': 'r',
+             'linewidth': 1.5, 'alpha': 0.7, 'linestyle': '--', 'label': "Filter Response"},
+        ]
 
-    # === Plot ===
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle(f"Ormsby Bandpass Filter Demo (F1={f1}, F2={f2}, F3={f3}, F4={f4} Hz)")
+        subplots = [
+            # Top-left: Original signal (time domain)
+            {
+                'lines': [{'x': t_ms, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8}],
+                'title': "Original Signal",
+                'xlabel': "Time (ms)",
+                'ylabel': "Amplitude",
+                'grid': True,
+            },
+            # Top-right: Filtered signal (time domain)
+            {
+                'lines': [{'x': t_ms, 'y': filtered_data[:, 0], 'color': 'g', 'linewidth': 0.8}],
+                'title': "Filtered Signal (cos² taper)",
+                'xlabel': "Time (ms)",
+                'ylabel': "Amplitude",
+                'grid': True,
+            },
+            # Bottom-left: Compare all taper responses
+            {
+                'lines': taper_lines,
+                'axvlines': [
+                    {'x': f1, 'color': 'gray', 'linestyle': ':', 'alpha': 0.7},
+                    {'x': f2, 'color': 'gray', 'linestyle': ':', 'alpha': 0.7},
+                    {'x': f3, 'color': 'gray', 'linestyle': ':', 'alpha': 0.7},
+                    {'x': f4, 'color': 'gray', 'linestyle': ':', 'alpha': 0.7},
+                ],
+                'title': "Taper Comparison (Filter Response)",
+                'xlabel': "Frequency (Hz)",
+                'ylabel': "Response",
+                'legend': True,
+                'grid': True,
+                'ylim': (-0.05, 1.1),
+            },
+            # Bottom-right: Spectrum before/after + filter response (normalized)
+            {
+                'lines': spectrum_lines,
+                'title': "Spectrum Before/After + Response (Normalized)",
+                'xlabel': "Frequency (Hz)",
+                'ylabel': "Normalized Magnitude / Response",
+                'legend': True,
+                'grid': True,
+                'ylim': (-0.05, 1.15),
+            },
+        ]
 
-    # Top-left: Original signal (time domain)
-    axes[0, 0].plot(t * 1000, data[:, 0], "b-", linewidth=0.8)
-    axes[0, 0].set_title("Original Signal")
-    axes[0, 0].set_xlabel("Time (ms)")
-    axes[0, 0].set_ylabel("Amplitude")
-    axes[0, 0].grid(True, alpha=0.3)
+        figure_params = {
+            'suptitle': f"Ormsby Bandpass Filter Demo (F1={f1}, F2={f2}, F3={f3}, F4={f4} Hz)",
+            'figsize': (12, 8),
+        }
 
-    # Top-right: Filtered signal (time domain)
-    axes[0, 1].plot(t * 1000, filtered_data[:, 0], "g-", linewidth=0.8)
-    axes[0, 1].set_title("Filtered Signal (cos² taper)")
-    axes[0, 1].set_xlabel("Time (ms)")
-    axes[0, 1].set_ylabel("Amplitude")
-    axes[0, 1].grid(True, alpha=0.3)
-
-    # Bottom-left: Compare all taper responses (zoomed on transition)
-    # Show low transition (f1 to f2)
-    trans_mask = (freqs >= 0) & (freqs <= 100)
-    for taper, color in zip(taper_types, taper_colors):
-        axes[1, 0].plot(freqs[trans_mask], responses[taper][trans_mask],
-                        color=color, linewidth=1.5, label=taper)
-    axes[1, 0].axvline(x=f1, color="gray", linestyle=":", alpha=0.7)
-    axes[1, 0].axvline(x=f2, color="gray", linestyle=":", alpha=0.7)
-    axes[1, 0].axvline(x=f3, color="gray", linestyle=":", alpha=0.7)
-    axes[1, 0].axvline(x=f4, color="gray", linestyle=":", alpha=0.7)
-    axes[1, 0].set_title("Taper Comparison (Filter Response)")
-    axes[1, 0].set_xlabel("Frequency (Hz)")
-    axes[1, 0].set_ylabel("Response")
-    axes[1, 0].legend(fontsize=9)
-    axes[1, 0].grid(True, alpha=0.3)
-    axes[1, 0].set_ylim(-0.05, 1.1)
-
-    # Bottom-right: Filtered spectrum + filter response
-    max_freq = 200
-    freq_mask = freqs <= max_freq
-    ax2 = axes[1, 1].twinx()
-    axes[1, 1].plot(freqs[freq_mask], original_spectrum[freq_mask], "b-",
-                    linewidth=0.8, alpha=0.5, label="Original")
-    axes[1, 1].plot(freqs[freq_mask], filtered_spectrum[freq_mask], "g-",
-                    linewidth=0.8, label="Filtered (cos²)")
-    ax2.plot(freqs[freq_mask], responses["cos2"][freq_mask], "r-",
-             linewidth=1.5, alpha=0.7, label="Filter Response")
-    ax2.set_ylim(0, 1.2)
-    ax2.set_ylabel("Filter Response", color="r")
-    axes[1, 1].set_title("Spectrum Before/After + Response")
-    axes[1, 1].set_xlabel("Frequency (Hz)")
-    axes[1, 1].set_ylabel("Magnitude")
-    axes[1, 1].legend(fontsize=8, loc="upper right")
-    axes[1, 1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.show()
+        cls.render_demo_figure(subplots, figure_params)
 
 
 if __name__ == "__main__":
-    _demo()
+    print(OrmsbyFilter.describe())
+    print()
+    OrmsbyFilter.demo()

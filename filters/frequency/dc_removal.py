@@ -82,96 +82,107 @@ class DCRemovalFilter(BaseFilter):
 
             return result
 
+    @classmethod
+    def demo(cls) -> None:
+        """
+        Visual demonstration of the DC Removal filter.
 
-def _demo() -> None:
-    """
-    Visual demonstration of the DC Removal filter.
+        Creates synthetic data with DC offset and shows before/after comparison.
+        """
+        # === Create synthetic data ===
+        sample_interval = 0.001  # 1 ms (1000 Hz sampling rate)
+        duration = 0.5  # 500 ms
+        n_samples = int(duration / sample_interval)
+        t = np.arange(n_samples) * sample_interval
+        t_ms = t * 1000
 
-    Usage:
-        python -W ignore::RuntimeWarning -m filters.frequency.dc_removal
+        # Create signal with:
+        # - A sine wave (actual signal)
+        # - A DC offset that varies (baseline drift)
+        # - Some low-frequency drift
+        signal_component = 1.0 * np.sin(2 * np.pi * 25 * t)
+        dc_offset = 2.0  # Constant DC offset
+        drift = 0.5 * np.sin(2 * np.pi * 2 * t)  # Slow drift (2 Hz)
 
-    Creates synthetic data with DC offset and shows before/after comparison.
-    """
-    import matplotlib.pyplot as plt
+        signal = signal_component + dc_offset + drift
 
-    # Print filter description
-    print(DCRemovalFilter.describe())
-    print()
+        # Reshape to 2D (samples x traces) - single trace
+        data = signal.reshape(-1, 1).astype(np.float32)
 
-    # === Create synthetic data ===
-    sample_interval = 0.001  # 1 ms (1000 Hz sampling rate)
-    duration = 0.5  # 500 ms
-    n_samples = int(duration / sample_interval)
-    t = np.arange(n_samples) * sample_interval
+        # === Apply DC removal with different methods ===
+        dc_trace = cls(method="trace")
+        dc_sliding = cls(method="sliding", window_ms=100.0)
 
-    # Create signal with:
-    # - A sine wave (actual signal)
-    # - A DC offset that varies (baseline drift)
-    # - Some low-frequency drift
-    signal_component = 1.0 * np.sin(2 * np.pi * 25 * t)
-    dc_offset = 2.0  # Constant DC offset
-    drift = 0.5 * np.sin(2 * np.pi * 2 * t)  # Slow drift (2 Hz)
+        filtered_trace = dc_trace.apply(data, sample_interval)
+        filtered_sliding = dc_sliding.apply(data, sample_interval)
 
-    signal = signal_component + dc_offset + drift
+        mean_after = np.mean(filtered_trace[:, 0])
 
-    # Reshape to 2D (samples x traces) - single trace
-    data = signal.reshape(-1, 1).astype(np.float32)
+        subplots = [
+            # Top-left: Original signal
+            {
+                'lines': [
+                    {'x': t_ms, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8},
+                ],
+                'axhlines': [
+                    {'y': 0, 'color': 'k', 'linestyle': '-', 'alpha': 0.3},
+                    {'y': dc_offset, 'color': 'r', 'linestyle': '--', 'alpha': 0.7},
+                ],
+                'title': "Original Signal (with DC offset + drift)",
+                'xlabel': "Time (ms)",
+                'ylabel': "Amplitude",
+                'grid': True,
+            },
+            # Top-right: After trace-mean removal
+            {
+                'lines': [
+                    {'x': t_ms, 'y': filtered_trace[:, 0], 'color': 'g', 'linewidth': 0.8},
+                ],
+                'axhlines': [{'y': 0, 'color': 'k', 'linestyle': '-', 'alpha': 0.3}],
+                'title': f"After DC Removal (method='trace', mean={mean_after:.4f})",
+                'xlabel': "Time (ms)",
+                'ylabel': "Amplitude",
+                'grid': True,
+            },
+            # Bottom-left: After sliding window removal
+            {
+                'lines': [
+                    {'x': t_ms, 'y': filtered_sliding[:, 0], 'color': 'm', 'linewidth': 0.8},
+                ],
+                'axhlines': [{'y': 0, 'color': 'k', 'linestyle': '-', 'alpha': 0.3}],
+                'title': "After DC Removal (method='sliding', window=100ms)",
+                'xlabel': "Time (ms)",
+                'ylabel': "Amplitude",
+                'grid': True,
+            },
+            # Bottom-right: Comparison of all three
+            {
+                'lines': [
+                    {'x': t_ms, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8,
+                     'alpha': 0.5, 'label': "Original"},
+                    {'x': t_ms, 'y': filtered_trace[:, 0], 'color': 'g', 'linewidth': 0.8,
+                     'label': "Trace mean"},
+                    {'x': t_ms, 'y': filtered_sliding[:, 0], 'color': 'm', 'linewidth': 0.8,
+                     'label': "Sliding (100ms)"},
+                ],
+                'axhlines': [{'y': 0, 'color': 'k', 'linestyle': '-', 'alpha': 0.3}],
+                'title': "Comparison",
+                'xlabel': "Time (ms)",
+                'ylabel': "Amplitude",
+                'legend': True,
+                'grid': True,
+            },
+        ]
 
-    # === Apply DC removal with different methods ===
-    dc_trace = DCRemovalFilter(method="trace")
-    dc_sliding = DCRemovalFilter(method="sliding", window_ms=100.0)
+        figure_params = {
+            'suptitle': "DC Removal Filter Demo",
+            'figsize': (12, 8),
+        }
 
-    filtered_trace = dc_trace.apply(data, sample_interval)
-    filtered_sliding = dc_sliding.apply(data, sample_interval)
-
-    # === Plot ===
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle("DC Removal Filter Demo")
-
-    # Top-left: Original signal
-    axes[0, 0].plot(t * 1000, data[:, 0], "b-", linewidth=0.8)
-    axes[0, 0].axhline(y=0, color="k", linestyle="-", alpha=0.3)
-    axes[0, 0].axhline(y=dc_offset, color="r", linestyle="--", alpha=0.7, label=f"DC offset = {dc_offset}")
-    axes[0, 0].set_title("Original Signal (with DC offset + drift)")
-    axes[0, 0].set_xlabel("Time (ms)")
-    axes[0, 0].set_ylabel("Amplitude")
-    axes[0, 0].legend(fontsize=8)
-    axes[0, 0].grid(True, alpha=0.3)
-
-    # Top-right: After trace-mean removal
-    axes[0, 1].plot(t * 1000, filtered_trace[:, 0], "g-", linewidth=0.8)
-    axes[0, 1].axhline(y=0, color="k", linestyle="-", alpha=0.3)
-    axes[0, 1].set_title("After DC Removal (method='trace')")
-    axes[0, 1].set_xlabel("Time (ms)")
-    axes[0, 1].set_ylabel("Amplitude")
-    axes[0, 1].grid(True, alpha=0.3)
-    # Show that mean is now ~0
-    mean_after = np.mean(filtered_trace[:, 0])
-    axes[0, 1].text(0.02, 0.98, f"Mean = {mean_after:.4f}", transform=axes[0, 1].transAxes,
-                    fontsize=9, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    # Bottom-left: After sliding window removal
-    axes[1, 0].plot(t * 1000, filtered_sliding[:, 0], "m-", linewidth=0.8)
-    axes[1, 0].axhline(y=0, color="k", linestyle="-", alpha=0.3)
-    axes[1, 0].set_title("After DC Removal (method='sliding', window=100ms)")
-    axes[1, 0].set_xlabel("Time (ms)")
-    axes[1, 0].set_ylabel("Amplitude")
-    axes[1, 0].grid(True, alpha=0.3)
-
-    # Bottom-right: Comparison of all three
-    axes[1, 1].plot(t * 1000, data[:, 0], "b-", linewidth=0.8, alpha=0.5, label="Original")
-    axes[1, 1].plot(t * 1000, filtered_trace[:, 0], "g-", linewidth=0.8, label="Trace mean")
-    axes[1, 1].plot(t * 1000, filtered_sliding[:, 0], "m-", linewidth=0.8, label="Sliding (100ms)")
-    axes[1, 1].axhline(y=0, color="k", linestyle="-", alpha=0.3)
-    axes[1, 1].set_title("Comparison")
-    axes[1, 1].set_xlabel("Time (ms)")
-    axes[1, 1].set_ylabel("Amplitude")
-    axes[1, 1].legend(fontsize=8)
-    axes[1, 1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.show()
+        cls.render_demo_figure(subplots, figure_params)
 
 
 if __name__ == "__main__":
-    _demo()
+    print(DCRemovalFilter.describe())
+    print()
+    DCRemovalFilter.demo()

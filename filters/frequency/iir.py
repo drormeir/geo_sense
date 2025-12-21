@@ -164,117 +164,132 @@ class IIRFilter(BaseFilter):
 
         return result
 
+    @classmethod
+    def demo(cls) -> None:
+        """
+        Visual demonstration of the IIR filter.
 
-def _demo() -> None:
-    """
-    Visual demonstration of the IIR filter.
+        Shows filter response comparison for different IIR designs.
+        """
+        from scipy.fft import fft, fftfreq
 
-    Usage:
-        python -W ignore::RuntimeWarning -m filters.frequency.butterworth
+        # === Create synthetic data ===
+        sample_interval = 0.001  # 1 ms (1000 Hz sampling rate)
+        duration = 0.5  # 500 ms
+        n_samples = int(duration / sample_interval)
+        t = np.arange(n_samples) * sample_interval
+        t_ms = t * 1000
 
-    Shows filter response comparison for different IIR designs.
-    """
-    import matplotlib.pyplot as plt
-    from scipy.fft import fft, fftfreq
+        signal = (
+            1.0 * np.sin(2 * np.pi * 5 * t) +
+            2.0 * np.sin(2 * np.pi * 50 * t) +
+            1.5 * np.sin(2 * np.pi * 80 * t) +
+            0.8 * np.sin(2 * np.pi * 200 * t)
+        )
+        data = signal.reshape(-1, 1).astype(np.float32)
 
-    # Print filter description
-    print(IIRFilter.describe())
-    print()
+        # Filter parameters
+        low_freq, high_freq = 20.0, 120.0
+        order = 4
 
-    # === Create synthetic data ===
-    sample_interval = 0.001  # 1 ms (1000 Hz sampling rate)
-    duration = 0.5  # 500 ms
-    n_samples = int(duration / sample_interval)
-    t = np.arange(n_samples) * sample_interval
+        # === Get filter responses for different designs ===
+        designs = ["butterworth", "bessel", "chebyshev1", "chebyshev2", "elliptic"]
+        design_labels = ["Butterworth", "Bessel", "Chebyshev I", "Chebyshev II", "Elliptic"]
+        colors = ["blue", "green", "orange", "red", "purple"]
 
-    # Composite signal with multiple frequencies
-    signal = (
-        1.0 * np.sin(2 * np.pi * 5 * t) +    # Low frequency noise
-        2.0 * np.sin(2 * np.pi * 50 * t) +   # Signal in passband
-        1.5 * np.sin(2 * np.pi * 80 * t) +   # Signal in passband
-        0.8 * np.sin(2 * np.pi * 200 * t)    # High frequency noise
-    )
+        freqs = np.abs(fftfreq(n_samples, d=sample_interval))
+        freq_mask = freqs <= 200
+        zoom_mask = (freqs >= 5) & (freqs <= 50)
 
-    # Reshape to 2D
-    data = signal.reshape(-1, 1).astype(np.float32)
+        impulse = np.zeros((n_samples, 1), dtype=np.float32)
+        impulse[n_samples // 2, 0] = 1.0
 
-    # Filter parameters
-    low_freq, high_freq = 20.0, 120.0
-    order = 4
+        responses = {}
+        filtered_results = {}
+        for design in designs:
+            filt = cls(low_freq=low_freq, high_freq=high_freq, order=order, design=design)
+            impulse_response = filt.apply(impulse, sample_interval)
+            responses[design] = np.abs(fft(impulse_response[:, 0]))
+            filtered_results[design] = filt.apply(data, sample_interval)
 
-    # === Get filter responses for different designs ===
-    designs = ["butterworth", "bessel", "chebyshev1", "chebyshev2", "elliptic"]
-    design_labels = ["Butterworth", "Bessel", "Chebyshev I", "Chebyshev II", "Elliptic"]
-    colors = ["blue", "green", "orange", "red", "purple"]
+        # Build line specs for each plot
+        filtered_lines = [
+            {'x': t_ms, 'y': filtered_results[d][:, 0], 'color': c,
+             'linewidth': 0.8, 'alpha': 0.7, 'label': l}
+            for d, l, c in zip(designs, design_labels, colors)
+        ]
 
-    freqs = np.abs(fftfreq(n_samples, d=sample_interval))
-    freq_mask = freqs <= 200
+        response_lines = []
+        for d, l, c in zip(designs, design_labels, colors):
+            resp = responses[d]
+            resp_norm = resp / np.max(resp) if np.max(resp) > 0 else resp
+            response_lines.append(
+                {'x': freqs[freq_mask], 'y': resp_norm[freq_mask],
+                 'color': c, 'linewidth': 1.5, 'label': l}
+            )
 
-    # Get filter responses by applying to impulse
-    impulse = np.zeros((n_samples, 1), dtype=np.float32)
-    impulse[n_samples // 2, 0] = 1.0
+        zoom_lines = []
+        for d, l, c in zip(designs, design_labels, colors):
+            resp = responses[d]
+            resp_norm = resp / np.max(resp) if np.max(resp) > 0 else resp
+            zoom_lines.append(
+                {'x': freqs[zoom_mask], 'y': resp_norm[zoom_mask],
+                 'color': c, 'linewidth': 1.5, 'label': l}
+            )
 
-    responses = {}
-    filtered_results = {}
-    for design in designs:
-        filt = IIRFilter(low_freq=low_freq, high_freq=high_freq, order=order, design=design)
-        impulse_response = filt.apply(impulse, sample_interval)
-        responses[design] = np.abs(fft(impulse_response[:, 0]))
-        filtered_results[design] = filt.apply(data, sample_interval)
+        subplots = [
+            # Top-left: Original signal
+            {
+                'lines': [{'x': t_ms, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8}],
+                'title': "Original Signal",
+                'xlabel': "Time (ms)",
+                'ylabel': "Amplitude",
+                'grid': True,
+            },
+            # Top-right: Filtered signals
+            {
+                'lines': filtered_lines,
+                'title': "Filtered Signals (All Designs)",
+                'xlabel': "Time (ms)",
+                'ylabel': "Amplitude",
+                'legend': True,
+                'grid': True,
+            },
+            # Bottom-left: Filter response comparison
+            {
+                'lines': response_lines,
+                'axvlines': [
+                    {'x': low_freq, 'color': 'gray', 'linestyle': ':', 'alpha': 0.7},
+                    {'x': high_freq, 'color': 'gray', 'linestyle': ':', 'alpha': 0.7},
+                ],
+                'title': "Filter Response Comparison (All Designs)",
+                'xlabel': "Frequency (Hz)",
+                'ylabel': "Normalized Response",
+                'legend': True,
+                'grid': True,
+                'ylim': (-0.05, 1.15),
+            },
+            # Bottom-right: Zoomed transition band
+            {
+                'lines': zoom_lines,
+                'axvlines': [{'x': low_freq, 'color': 'gray', 'linestyle': ':', 'alpha': 0.7}],
+                'title': "Low Transition Band (Zoomed)",
+                'xlabel': "Frequency (Hz)",
+                'ylabel': "Normalized Response",
+                'legend': True,
+                'grid': True,
+            },
+        ]
 
-    # === Plot ===
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle(f"IIR Filter Demo (Low={low_freq}Hz, High={high_freq}Hz, Order={order})")
+        figure_params = {
+            'suptitle': f"IIR Filter Demo (Low={low_freq}Hz, High={high_freq}Hz, Order={order})",
+            'figsize': (12, 8),
+        }
 
-    # Top-left: Original signal
-    axes[0, 0].plot(t * 1000, data[:, 0], "b-", linewidth=0.8)
-    axes[0, 0].set_title("Original Signal")
-    axes[0, 0].set_xlabel("Time (ms)")
-    axes[0, 0].set_ylabel("Amplitude")
-    axes[0, 0].grid(True, alpha=0.3)
-
-    # Top-right: Filtered signals (all designs overlaid)
-    for design, label, color in zip(designs, design_labels, colors):
-        axes[0, 1].plot(t * 1000, filtered_results[design][:, 0],
-                        color=color, linewidth=0.8, alpha=0.7, label=label)
-    axes[0, 1].set_title("Filtered Signals (All Designs)")
-    axes[0, 1].set_xlabel("Time (ms)")
-    axes[0, 1].set_ylabel("Amplitude")
-    axes[0, 1].legend(fontsize=8)
-    axes[0, 1].grid(True, alpha=0.3)
-
-    # Bottom-left: Compare filter responses for different designs
-    for design, label, color in zip(designs, design_labels, colors):
-        resp = responses[design]
-        resp_norm = resp / np.max(resp) if np.max(resp) > 0 else resp
-        axes[1, 0].plot(freqs[freq_mask], resp_norm[freq_mask],
-                        color=color, linewidth=1.5, label=label)
-    axes[1, 0].axvline(x=low_freq, color="gray", linestyle=":", alpha=0.7)
-    axes[1, 0].axvline(x=high_freq, color="gray", linestyle=":", alpha=0.7)
-    axes[1, 0].set_title("Filter Response Comparison (All Designs)")
-    axes[1, 0].set_xlabel("Frequency (Hz)")
-    axes[1, 0].set_ylabel("Normalized Response")
-    axes[1, 0].legend(fontsize=8)
-    axes[1, 0].grid(True, alpha=0.3)
-    axes[1, 0].set_ylim(-0.05, 1.15)
-
-    # Bottom-right: Zoom on transition band to show differences
-    zoom_mask = (freqs >= 5) & (freqs <= 50)
-    for design, label, color in zip(designs, design_labels, colors):
-        resp = responses[design]
-        resp_norm = resp / np.max(resp) if np.max(resp) > 0 else resp
-        axes[1, 1].plot(freqs[zoom_mask], resp_norm[zoom_mask],
-                        color=color, linewidth=1.5, label=label)
-    axes[1, 1].axvline(x=low_freq, color="gray", linestyle=":", alpha=0.7)
-    axes[1, 1].set_title("Low Transition Band (Zoomed)")
-    axes[1, 1].set_xlabel("Frequency (Hz)")
-    axes[1, 1].set_ylabel("Normalized Response")
-    axes[1, 1].legend(fontsize=8)
-    axes[1, 1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.show()
+        cls.render_demo_figure(subplots, figure_params)
 
 
 if __name__ == "__main__":
-    _demo()
+    print(IIRFilter.describe())
+    print()
+    IIRFilter.demo()

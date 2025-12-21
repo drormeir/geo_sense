@@ -9,7 +9,7 @@ Provides:
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, ClassVar
 import uuid
@@ -204,6 +204,215 @@ class BaseFilter(ABC):
                 lines.append(f"      {spec.tooltip}")
 
         return "\n".join(lines)
+
+    # Flag set by FiltersDialog to indicate demo is called from UI
+    _demo_called_from_ui: bool = False
+
+    @classmethod
+    def render_demo_figure(
+        cls,
+        subplots: list[dict[str, Any]],
+        figure_params: dict[str, Any] | None = None
+    ) -> None:
+        """
+        Render a 2x2 demo figure from subplot specifications.
+
+        Args:
+            subplots: List of 4 dictionaries, one per subplot (top-left, top-right,
+                     bottom-left, bottom-right). Each dict can contain:
+
+                Common keys:
+                    title: str - subplot title
+                    xlabel: str - x-axis label
+                    ylabel: str - y-axis label
+                    grid: bool | float - show grid (True or alpha value)
+                    legend: bool | dict - show legend (True or legend kwargs)
+                    xlim: tuple - (min, max) for x-axis
+                    ylim: tuple - (min, max) for y-axis
+                    invert_xaxis: bool - invert x-axis
+                    invert_yaxis: bool - invert y-axis
+                    axvlines: list[dict] - vertical lines [{x, color, linestyle, alpha}, ...]
+                    axhlines: list[dict] - horizontal lines [{y, color, linestyle, alpha}, ...]
+
+                For line plots (type='plot' or default):
+                    lines: list[dict] - line specifications, each with:
+                        y: array - y data (required)
+                        x: array - x data (optional, defaults to indices)
+                        label: str - legend label
+                        color: str - line color
+                        linewidth: float - line width
+                        alpha: float - transparency
+                        linestyle: str - line style ('-', '--', ':', etc.)
+
+                For image plots (type='imshow'):
+                    data: 2D array - image data
+                    extent: list - [x0, x1, y0, y1]
+                    cmap: str - colormap name
+                    vmin: float - color scale minimum
+                    vmax: float - color scale maximum
+                    colorbar: bool - show colorbar
+                    aspect: str - aspect ratio ('auto', 'equal', etc.)
+
+            figure_params: Dict with figure-level parameters:
+                suptitle: str - figure title
+                figsize: tuple - (width, height) in inches
+        """
+        import matplotlib.pyplot as plt
+
+        fig_params = figure_params or {}
+        figsize = fig_params.get('figsize', (12, 8))
+
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
+        axes_flat = [axes[0, 0], axes[0, 1], axes[1, 0], axes[1, 1]]
+
+        if 'suptitle' in fig_params:
+            fig.suptitle(fig_params['suptitle'])
+
+        for ax, spec in zip(axes_flat, subplots):
+            if not spec:  # Skip empty subplots
+                ax.axis('off')
+                continue
+
+            plot_type = spec.get('type', 'plot')
+
+            if plot_type == 'imshow':
+                cls._render_imshow(ax, spec)
+            else:
+                cls._render_plot(ax, spec)
+
+            # Common settings
+            if 'title' in spec:
+                ax.set_title(spec['title'])
+            if 'xlabel' in spec:
+                ax.set_xlabel(spec['xlabel'])
+            if 'ylabel' in spec:
+                ax.set_ylabel(spec['ylabel'])
+
+            # Grid
+            grid = spec.get('grid')
+            if grid is True:
+                ax.grid(True, alpha=0.3)
+            elif isinstance(grid, (int, float)):
+                ax.grid(True, alpha=grid)
+
+            # Axis limits
+            if 'xlim' in spec:
+                ax.set_xlim(spec['xlim'])
+            if 'ylim' in spec:
+                ax.set_ylim(spec['ylim'])
+
+            # Axis inversion
+            if spec.get('invert_xaxis'):
+                ax.invert_xaxis()
+            if spec.get('invert_yaxis'):
+                ax.invert_yaxis()
+
+            # Vertical lines
+            for vline in spec.get('axvlines', []):
+                ax.axvline(
+                    x=vline.get('x', 0),
+                    color=vline.get('color', 'gray'),
+                    linestyle=vline.get('linestyle', ':'),
+                    alpha=vline.get('alpha', 0.7)
+                )
+
+            # Horizontal lines
+            for hline in spec.get('axhlines', []):
+                ax.axhline(
+                    y=hline.get('y', 0),
+                    color=hline.get('color', 'gray'),
+                    linestyle=hline.get('linestyle', ':'),
+                    alpha=hline.get('alpha', 0.7)
+                )
+
+            # Legend
+            legend = spec.get('legend')
+            if legend is True:
+                ax.legend(fontsize=8)
+            elif isinstance(legend, dict):
+                ax.legend(**legend)
+
+        plt.tight_layout()
+        cls.show_demo_plot()
+
+    @classmethod
+    def _render_plot(cls, ax, spec: dict[str, Any]) -> None:
+        """Render a line plot subplot."""
+        lines = spec.get('lines', [])
+        for line in lines:
+            y = line.get('y')
+            if y is None:
+                continue
+            x = line.get('x')
+            kwargs = cls.get_args(line, ['label', 'color', 'linewidth', 'alpha', 'linestyle'])
+
+            if x is not None:
+                ax.plot(x, y, **kwargs)
+            else:
+                ax.plot(y, **kwargs)
+
+    @classmethod
+    def _render_imshow(cls, ax, spec: dict[str, Any]) -> None:
+        """Render an imshow subplot."""
+        import matplotlib.pyplot as plt
+
+        data = spec.get('data')
+        if data is None:
+            return
+
+        kwargs = cls.get_args(spec, ['extent', 'cmap', 'vmin', 'vmax', 'aspect'], [None, None, None, None, 'auto'])
+        im = ax.imshow(data, **kwargs)
+
+        if spec.get('colorbar'):
+            plt.colorbar(im, ax=ax, shrink=spec.get('colorbar_shrink', 0.8))
+
+    @staticmethod
+    def get_args(source: dict[str, Any], keys: list[str], default_values: list[Any] = None) -> dict[str, Any]:
+        """Get arguments from source."""
+        target = {}
+        if default_values is None:
+            default_values = [None] * len(keys)
+        for key, default_value in zip(keys, default_values):
+            if key in source:
+                target[key] = source[key]
+            elif default_value is not None:
+                target[key] = default_value
+        return target
+
+    @staticmethod
+    def show_demo_plot() -> None:
+        """
+        Show matplotlib plot, handling Qt event loop properly.
+
+        When running from command line, blocks until window is closed.
+        When called from Qt application (via Demo button), does nothing
+        as the caller handles the display.
+        """
+        import matplotlib.pyplot as plt
+
+        # If called from UI, let the dialog handle plt.show()
+        if BaseFilter._demo_called_from_ui:
+            return
+
+        # Command line - block until closed
+        plt.show()
+
+    @classmethod
+    def demo(cls) -> None:
+        """
+        Visual demonstration of the filter.
+
+        Override in subclasses to provide an interactive demo with
+        synthetic data and matplotlib visualization.
+
+        Default implementation shows a message that no demo is available.
+        """
+        print(f"No demo available for {cls.filter_name}")
+
+    @classmethod
+    def has_demo(cls) -> bool:
+        """Check if this filter has a custom demo implementation."""
+        return cls.demo is not BaseFilter.demo
 
     @abstractmethod
     def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:

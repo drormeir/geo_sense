@@ -101,6 +101,11 @@ class FiltersDialog(QDialog):
         self._desc_button.clicked.connect(self._on_show_description)
         selection_layout.addWidget(self._desc_button)
 
+        # Demo button
+        self._demo_button = QPushButton("Demo")
+        self._demo_button.clicked.connect(self._on_show_demo)
+        selection_layout.addWidget(self._demo_button)
+
         selection_group.setLayout(selection_layout)
         layout.addWidget(selection_group)
 
@@ -336,6 +341,25 @@ class FiltersDialog(QDialog):
 
         dialog.exec()
 
+    def _on_show_demo(self) -> None:
+        """Run the filter's visual demo."""
+        if self._current_filter_class is None:
+            return
+
+        if not self._current_filter_class.has_demo():
+            return
+
+        import matplotlib.pyplot as plt
+        from .base import BaseFilter
+
+        # Set flag so show_demo_plot() knows not to call plt.show()
+        BaseFilter._demo_called_from_ui = True
+        try:
+            self._current_filter_class.demo()
+            plt.show(block=False)
+        finally:
+            BaseFilter._demo_called_from_ui = False
+
     def _update_pipeline_list(self) -> None:
         """Refresh the pipeline list widget."""
         self._pipeline_list.clear()
@@ -408,6 +432,10 @@ class FiltersDialog(QDialog):
 
         self._add_button.setEnabled(has_filter_types)
         self._desc_button.setEnabled(self._current_filter_class is not None)
+        self._demo_button.setEnabled(
+            self._current_filter_class is not None
+            and self._current_filter_class.has_demo()
+        )
         self._move_up_btn.setEnabled(has_selection)
         self._move_down_btn.setEnabled(has_selection)
         self._remove_btn.setEnabled(has_selection)

@@ -1360,9 +1360,11 @@ class SeismicSubWindow(UASSubWindow):
 
 
     def _on_filters_clicked(self) -> None:
-        """Open the filters dialog."""
-        dialog = FiltersDialog(self)
-        dialog.exec()
+        """Open the filters dialog (non-modal)."""
+        # Keep reference so dialog isn't garbage collected
+        self._filters_dialog = FiltersDialog(self)
+        self._filters_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._filters_dialog.show()
 
 
     def _apply_filters(self) -> None:

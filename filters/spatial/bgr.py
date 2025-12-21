@@ -94,106 +94,128 @@ class BGRFilter(BaseFilter):
 
         return result
 
+    @classmethod
+    def demo(cls) -> None:
+        """
+        Visual demonstration of the Background Removal filter.
 
-def _demo() -> None:
-    """
-    Visual demonstration of the Background Removal filter.
+        Creates synthetic GPR-like data with horizontal banding and shows
+        before/after comparison.
+        """
+        # === Create synthetic GPR-like data ===
+        sample_interval = 0.1e-9  # 0.1 ns
+        n_samples = 500  # Time samples
+        n_traces = 200   # Number of traces
 
-    Usage:
-        python -W ignore::RuntimeWarning -m filters.spatial.bgr
+        t = np.arange(n_samples) * sample_interval * 1e9  # time in ns
 
-    Creates synthetic GPR-like data with horizontal banding and shows
-    before/after comparison.
-    """
-    import matplotlib.pyplot as plt
+        # Initialize data
+        data = np.zeros((n_samples, n_traces), dtype=np.float32)
 
-    # Print filter description
-    print(BGRFilter.describe())
-    print()
+        # 1. Add horizontal banding (antenna ringing) - same on all traces
+        ringing = (
+            3.0 * np.exp(-t / 10) * np.sin(2 * np.pi * 0.1 * t) +
+            1.5 * np.exp(-t / 20) * np.sin(2 * np.pi * 0.05 * t + 1)
+        )
+        for i in range(n_traces):
+            data[:, i] += ringing
 
-    # === Create synthetic GPR-like data ===
-    sample_interval = 0.1e-9  # 0.1 ns
-    n_samples = 500  # Time samples
-    n_traces = 200   # Number of traces
+        # 2. Add a dipping reflector (should be preserved)
+        for i in range(n_traces):
+            reflector_time = 20 + i * 0.1  # Dipping layer
+            reflector_idx = int(reflector_time / (sample_interval * 1e9))
+            if 0 <= reflector_idx < n_samples - 10:
+                # Add a wavelet at the reflector position
+                wavelet_t = np.arange(20) * sample_interval * 1e9
+                wavelet = 2.0 * np.exp(-((wavelet_t - 5) ** 2) / 2) * np.sin(2 * np.pi * 0.5 * wavelet_t)
+                end_idx = min(reflector_idx + 20, n_samples)
+                data[reflector_idx:end_idx, i] += wavelet[:end_idx - reflector_idx]
 
-    t = np.arange(n_samples) * sample_interval * 1e9  # time in ns
-    x = np.arange(n_traces)  # trace numbers
+        # 3. Add a point reflector (hyperbola) - should be preserved
+        hyperbola_x0 = n_traces // 2
+        hyperbola_t0 = 35  # ns
+        velocity = 0.1  # ns per trace (controls hyperbola shape)
+        for i in range(n_traces):
+            dx = abs(i - hyperbola_x0)
+            hyperbola_time = np.sqrt(hyperbola_t0**2 + (dx * velocity * 10)**2)
+            hyperbola_idx = int(hyperbola_time / (sample_interval * 1e9))
+            if 0 <= hyperbola_idx < n_samples - 10:
+                wavelet_t = np.arange(15) * sample_interval * 1e9
+                amplitude = 1.5 * np.exp(-dx / 30)  # Amplitude decreases with offset
+                wavelet = amplitude * np.exp(-((wavelet_t - 3) ** 2) / 1.5) * np.sin(2 * np.pi * 0.6 * wavelet_t)
+                end_idx = min(hyperbola_idx + 15, n_samples)
+                data[hyperbola_idx:end_idx, i] += wavelet[:end_idx - hyperbola_idx]
 
-    # Initialize data
-    data = np.zeros((n_samples, n_traces), dtype=np.float32)
+        # === Apply BGR filter ===
+        bgr = cls(method="mean", num_traces=0)
+        filtered_data = bgr.apply(data, sample_interval)
 
-    # 1. Add horizontal banding (antenna ringing) - same on all traces
-    ringing = (
-        3.0 * np.exp(-t / 10) * np.sin(2 * np.pi * 0.1 * t) +
-        1.5 * np.exp(-t / 20) * np.sin(2 * np.pi * 0.05 * t + 1)
-    )
-    for i in range(n_traces):
-        data[:, i] += ringing
+        # === Prepare plot specifications ===
+        vmax = float(np.percentile(np.abs(data), 98))
+        trace_idx = n_traces // 2  # Center trace
 
-    # 2. Add a dipping reflector (should be preserved)
-    for i in range(n_traces):
-        reflector_time = 20 + i * 0.1  # Dipping layer
-        reflector_idx = int(reflector_time / (sample_interval * 1e9))
-        if 0 <= reflector_idx < n_samples - 10:
-            # Add a wavelet at the reflector position
-            wavelet_t = np.arange(20) * sample_interval * 1e9
-            wavelet = 2.0 * np.exp(-((wavelet_t - 5) ** 2) / 2) * np.sin(2 * np.pi * 0.5 * wavelet_t)
-            end_idx = min(reflector_idx + 20, n_samples)
-            data[reflector_idx:end_idx, i] += wavelet[:end_idx - reflector_idx]
+        subplots = [
+            # Top-left: Original data
+            {
+                'type': 'imshow',
+                'data': data,
+                'extent': [0, n_traces, t[-1], t[0]],
+                'cmap': 'seismic',
+                'vmin': -vmax,
+                'vmax': vmax,
+                'colorbar': True,
+                'title': "Original (with horizontal banding)",
+                'xlabel': "Trace Number",
+                'ylabel': "Time (ns)",
+            },
+            # Top-right: After BGR
+            {
+                'type': 'imshow',
+                'data': filtered_data,
+                'extent': [0, n_traces, t[-1], t[0]],
+                'cmap': 'seismic',
+                'vmin': -vmax,
+                'vmax': vmax,
+                'colorbar': True,
+                'title': "After BGR (banding removed)",
+                'xlabel': "Trace Number",
+                'ylabel': "Time (ns)",
+            },
+            # Bottom-left: Background trace
+            {
+                'lines': [{'x': ringing, 'y': t, 'color': 'r', 'linewidth': 0.8}],
+                'title': "Background Trace (removed)",
+                'xlabel': "Amplitude",
+                'ylabel': "Time (ns)",
+                'invert_yaxis': True,
+                'grid': True,
+            },
+            # Bottom-right: Single trace comparison
+            {
+                'lines': [
+                    {'x': data[:, trace_idx], 'y': t, 'color': 'b', 'linewidth': 0.8,
+                     'alpha': 0.7, 'label': "Original"},
+                    {'x': filtered_data[:, trace_idx], 'y': t, 'color': 'g',
+                     'linewidth': 0.8, 'label': "After BGR"},
+                ],
+                'title': f"Single Trace Comparison (trace {trace_idx})",
+                'xlabel': "Amplitude",
+                'ylabel': "Time (ns)",
+                'invert_yaxis': True,
+                'legend': True,
+                'grid': True,
+            },
+        ]
 
-    # 3. Add a point reflector (hyperbola) - should be preserved
-    hyperbola_x0 = n_traces // 2
-    hyperbola_t0 = 35  # ns
-    velocity = 0.1  # ns per trace (controls hyperbola shape)
-    for i in range(n_traces):
-        dx = abs(i - hyperbola_x0)
-        hyperbola_time = np.sqrt(hyperbola_t0**2 + (dx * velocity * 10)**2)
-        hyperbola_idx = int(hyperbola_time / (sample_interval * 1e9))
-        if 0 <= hyperbola_idx < n_samples - 10:
-            wavelet_t = np.arange(15) * sample_interval * 1e9
-            amplitude = 1.5 * np.exp(-dx / 30)  # Amplitude decreases with offset
-            wavelet = amplitude * np.exp(-((wavelet_t - 3) ** 2) / 1.5) * np.sin(2 * np.pi * 0.6 * wavelet_t)
-            end_idx = min(hyperbola_idx + 15, n_samples)
-            data[hyperbola_idx:end_idx, i] += wavelet[:end_idx - hyperbola_idx]
+        figure_params = {
+            'suptitle': "Background Removal (BGR) Filter Demo",
+            'figsize': (12, 8),
+        }
 
-    # === Apply BGR filter ===
-    bgr = BGRFilter(method="mean", num_traces=0)
-    filtered_data = bgr.apply(data, sample_interval)
-
-    # === Plot ===
-    fig, axes = plt.subplots(1, 3, figsize=(15, 6))
-    fig.suptitle("Background Removal (BGR) Filter Demo")
-
-    # Common colorbar limits
-    vmax = np.percentile(np.abs(data), 98)
-
-    # Left: Original data
-    im0 = axes[0].imshow(data, aspect='auto', cmap='seismic',
-                         extent=[0, n_traces, t[-1], t[0]], vmin=-vmax, vmax=vmax)
-    axes[0].set_title("Original (with horizontal banding)")
-    axes[0].set_xlabel("Trace Number")
-    axes[0].set_ylabel("Time (ns)")
-    plt.colorbar(im0, ax=axes[0], shrink=0.8)
-
-    # Middle: Background trace
-    axes[1].plot(ringing, t, "r-", linewidth=0.8)
-    axes[1].set_title("Background Trace (to be removed)")
-    axes[1].set_xlabel("Amplitude")
-    axes[1].set_ylabel("Time (ns)")
-    axes[1].invert_yaxis()
-    axes[1].grid(True, alpha=0.3)
-
-    # Right: After BGR
-    im2 = axes[2].imshow(filtered_data, aspect='auto', cmap='seismic',
-                         extent=[0, n_traces, t[-1], t[0]], vmin=-vmax, vmax=vmax)
-    axes[2].set_title("After BGR (banding removed)")
-    axes[2].set_xlabel("Trace Number")
-    axes[2].set_ylabel("Time (ns)")
-    plt.colorbar(im2, ax=axes[2], shrink=0.8)
-
-    plt.tight_layout()
-    plt.show()
+        cls.render_demo_figure(subplots, figure_params)
 
 
 if __name__ == "__main__":
-    _demo()
+    print(BGRFilter.describe())
+    print()
+    BGRFilter.demo()

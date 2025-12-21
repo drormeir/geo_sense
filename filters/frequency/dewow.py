@@ -94,97 +94,101 @@ class DewowFilter(BaseFilter):
 
         return result
 
+    @classmethod
+    def demo(cls) -> None:
+        """
+        Visual demonstration of the Dewow filter.
 
-def _demo() -> None:
-    """
-    Visual demonstration of the Dewow filter.
+        Creates synthetic GPR-like data with wow artifact and shows
+        before/after comparison.
+        """
+        # === Create synthetic GPR-like data ===
+        sample_interval = 0.1e-9  # 0.1 ns (10 GHz sampling - typical for GPR)
+        duration = 100e-9  # 100 ns total time window
+        n_samples = int(duration / sample_interval)
+        t = np.arange(n_samples) * sample_interval * 1e9  # time in ns
 
-    Usage:
-        python -W ignore::RuntimeWarning -m filters.frequency.dewow
+        # Create synthetic GPR trace:
+        # 1. "Wow" component - exponentially decaying low-frequency artifact
+        wow = 5.0 * np.exp(-t / 30) * np.sin(2 * np.pi * 0.02 * t)
 
-    Creates synthetic GPR-like data with wow artifact and shows
-    before/after comparison.
-    """
-    import matplotlib.pyplot as plt
+        # 2. Reflections - Ricker wavelets at different times
+        def ricker(t, t0, f):
+            """Ricker wavelet centered at t0 with central frequency f."""
+            tau = t - t0
+            tau_scaled = tau * f / 1000
+            return (1 - 2 * np.pi**2 * tau_scaled**2) * np.exp(-np.pi**2 * tau_scaled**2)
 
-    # Print filter description
-    print(DewowFilter.describe())
-    print()
+        reflections = (
+            2.0 * ricker(t, 15, 500) +
+            1.5 * ricker(t, 35, 400) +
+            1.0 * ricker(t, 55, 350) +
+            0.7 * ricker(t, 75, 300)
+        )
 
-    # === Create synthetic GPR-like data ===
-    sample_interval = 0.1e-9  # 0.1 ns (10 GHz sampling - typical for GPR)
-    duration = 100e-9  # 100 ns total time window
-    n_samples = int(duration / sample_interval)
-    t = np.arange(n_samples) * sample_interval * 1e9  # time in ns
+        signal = wow + reflections
+        data = signal.reshape(-1, 1).astype(np.float32)
 
-    # Create synthetic GPR trace:
-    # 1. "Wow" component - exponentially decaying low-frequency artifact
-    wow = 5.0 * np.exp(-t / 30) * np.sin(2 * np.pi * 0.02 * t)
+        # === Apply dewow filter ===
+        dewow = cls(window_ns=20.0)
+        filtered_data = dewow.apply(data, sample_interval)
+        window_ns = dewow.get_parameter('window_ns')
 
-    # 2. Reflections - Ricker wavelets at different times
-    def ricker(t, t0, f):
-        """Ricker wavelet centered at t0 with central frequency f."""
-        tau = t - t0
-        # Scale factor for ns and GHz
-        tau_scaled = tau * f / 1000  # Convert to appropriate units
-        return (1 - 2 * np.pi**2 * tau_scaled**2) * np.exp(-np.pi**2 * tau_scaled**2)
+        subplots = [
+            # Top-left: Original signal with wow
+            {
+                'lines': [{'x': t, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8}],
+                'title': "Original GPR Trace (with wow artifact)",
+                'xlabel': "Time (ns)",
+                'ylabel': "Amplitude",
+                'grid': True,
+            },
+            # Top-right: After dewow
+            {
+                'lines': [{'x': t, 'y': filtered_data[:, 0], 'color': 'g', 'linewidth': 0.8}],
+                'title': "After Dewow",
+                'xlabel': "Time (ns)",
+                'ylabel': "Amplitude",
+                'grid': True,
+            },
+            # Bottom-left: Signal components
+            {
+                'lines': [
+                    {'x': t, 'y': wow, 'color': 'r', 'linewidth': 1, 'label': "Wow artifact"},
+                    {'x': t, 'y': reflections, 'color': 'b', 'linewidth': 0.8,
+                     'alpha': 0.7, 'label': "True reflections"},
+                ],
+                'title': "Signal Components",
+                'xlabel': "Time (ns)",
+                'ylabel': "Amplitude",
+                'legend': True,
+                'grid': True,
+            },
+            # Bottom-right: Comparison
+            {
+                'lines': [
+                    {'x': t, 'y': reflections, 'color': 'b', 'linewidth': 1,
+                     'alpha': 0.7, 'label': "True reflections"},
+                    {'x': t, 'y': filtered_data[:, 0], 'color': 'g', 'linewidth': 1,
+                     'linestyle': '--', 'label': "Dewowed signal"},
+                ],
+                'title': "Comparison: True Reflections vs Dewowed",
+                'xlabel': "Time (ns)",
+                'ylabel': "Amplitude",
+                'legend': True,
+                'grid': True,
+            },
+        ]
 
-    # Multiple reflections at different depths/times
-    reflections = (
-        2.0 * ricker(t, 15, 500) +   # Strong shallow reflection
-        1.5 * ricker(t, 35, 400) +   # Medium reflection
-        1.0 * ricker(t, 55, 350) +   # Deeper reflection
-        0.7 * ricker(t, 75, 300)     # Deep, attenuated reflection
-    )
+        figure_params = {
+            'suptitle': f"Dewow Filter Demo (window={window_ns:.0f}ns)",
+            'figsize': (12, 8),
+        }
 
-    signal = wow + reflections
-
-    # Reshape to 2D (samples x traces) - single trace
-    data = signal.reshape(-1, 1).astype(np.float32)
-
-    # === Apply dewow filter ===
-    dewow = DewowFilter(window_ns=20.0)
-    filtered_data = dewow.apply(data, sample_interval)
-
-    # === Plot ===
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle(f"Dewow Filter Demo (window={dewow.get_parameter('window_ns'):.0f}ns)")
-
-    # Top-left: Original signal with wow
-    axes[0, 0].plot(t, data[:, 0], "b-", linewidth=0.8)
-    axes[0, 0].set_title("Original GPR Trace (with wow artifact)")
-    axes[0, 0].set_xlabel("Time (ns)")
-    axes[0, 0].set_ylabel("Amplitude")
-    axes[0, 0].grid(True, alpha=0.3)
-
-    # Top-right: After dewow
-    axes[0, 1].plot(t, filtered_data[:, 0], "g-", linewidth=0.8)
-    axes[0, 1].set_title("After Dewow")
-    axes[0, 1].set_xlabel("Time (ns)")
-    axes[0, 1].set_ylabel("Amplitude")
-    axes[0, 1].grid(True, alpha=0.3)
-
-    # Bottom-left: Wow component only
-    axes[1, 0].plot(t, wow, "r-", linewidth=1, label="Wow artifact")
-    axes[1, 0].plot(t, reflections, "b-", linewidth=0.8, alpha=0.7, label="True reflections")
-    axes[1, 0].set_title("Signal Components")
-    axes[1, 0].set_xlabel("Time (ns)")
-    axes[1, 0].set_ylabel("Amplitude")
-    axes[1, 0].legend(fontsize=8)
-    axes[1, 0].grid(True, alpha=0.3)
-
-    # Bottom-right: Comparison - filtered vs true reflections
-    axes[1, 1].plot(t, reflections, "b-", linewidth=1, alpha=0.7, label="True reflections")
-    axes[1, 1].plot(t, filtered_data[:, 0], "g--", linewidth=1, label="Dewowed signal")
-    axes[1, 1].set_title("Comparison: True Reflections vs Dewowed")
-    axes[1, 1].set_xlabel("Time (ns)")
-    axes[1, 1].set_ylabel("Amplitude")
-    axes[1, 1].legend(fontsize=8)
-    axes[1, 1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.show()
+        cls.render_demo_figure(subplots, figure_params)
 
 
 if __name__ == "__main__":
-    _demo()
+    print(DewowFilter.describe())
+    print()
+    DewowFilter.demo()
