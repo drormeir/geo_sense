@@ -430,7 +430,6 @@ class SeismicSubWindow(UASSubWindow):
         self._time_axis_values_display: np.ndarray | None = None
         self._time_display_units: str = "s"
         self._time_display_value_factor: float = 1.0 # for display time in nano seconds, milliseconds, seconds
-        self._offset_meters: float = 0.0
         self._depth_converted_meters: np.ndarray | None = None
         self._depth_converted_display: np.ndarray | None = None
         self._horizontal_indices_in_data_region: np.ndarray | None = None
@@ -872,10 +871,17 @@ class SeismicSubWindow(UASSubWindow):
         """Get the raw data from the loaded data file."""
         return self._data_file.data if self._data_file is not None else None
 
+
     @property
     def time_interval_seconds(self) -> float:
         """Get the time interval in seconds."""
         return self._data_file.time_interval_seconds if self._data_file is not None else 1.0
+
+
+    @property
+    def offset_meters(self) -> float:
+        """Get the Tx-Rx offset in meters."""
+        return self._data_file.offset_meters if self._data_file is not None else 0.0
 
 
     def _motion_notify_event(self, event) -> None:
@@ -1751,31 +1757,27 @@ class SeismicSubWindow(UASSubWindow):
         - Two-way time: t = 2L/v
         - Solving for depth: d = sqrt((v*t/2)² - (offset/2)²)
         """
-        assert self._time_axis_values_seconds is not None
+        if self._time_axis_values_seconds is None:
+            self._depth_converted_meters = None
+            return
         air_velocity_m_per_s = min(self._display_settings['air_velocity_m_per_s'], C_VACUUM)
         ground_velocity_m_per_s = min(self._display_settings['ground_velocity_m_per_s'], C_VACUUM)
-        ind_sample_time_first_arrival = min(self._display_settings['ind_sample_time_first_arrival'], len(self._time_axis_values_seconds) - 1)
-        n_time_samples = len(self._time_axis_values_seconds)
-        critical_time = self._offset_meters / ground_velocity_m_per_s
-        half_offset = 0.5 * self._offset_meters
+        offset_meters = self.offset_meters
+        half_offset = 0.5 * offset_meters
         self._depth_converted_meters = np.empty_like(self._time_axis_values_seconds)
-        ind_sample_critical_time = ind_sample_time_first_arrival
-        while ind_sample_critical_time < n_time_samples and self._time_axis_values_seconds[ind_sample_critical_time] < critical_time:
-            ind_sample_critical_time += 1
         # Above surface (negative time): antenna height above ground
         # Uses air velocity for propagation before first arrival
-        self._depth_converted_meters[:ind_sample_time_first_arrival] = \
-            self._time_axis_values_seconds[:ind_sample_time_first_arrival] * air_velocity_m_per_s
-
+        # above ground depth is calculated using air velocity assuming one way travel time
+        time_axis_values = self._time_axis_values_seconds - offset_meters / ground_velocity_m_per_s  # 2nd arrival corrected time axis values
+        num_samples_1st_arrival = np.sum(self._time_axis_values_seconds < 0)
+        num_samples_2nd_arrival = num_samples_1st_arrival + np.sum(time_axis_values[num_samples_1st_arrival:] < 0.0)
+        self._depth_converted_meters[:num_samples_1st_arrival] = time_axis_values[:num_samples_1st_arrival] * air_velocity_m_per_s
+        self._depth_converted_meters[num_samples_1st_arrival:num_samples_2nd_arrival] = time_axis_values[num_samples_1st_arrival:num_samples_2nd_arrival] * ground_velocity_m_per_s
         # Below surface: geometric correction for bistatic antenna configuration
         # Signal travels diagonally from Tx to reflector to Rx
-        extra_time = (ind_sample_critical_time - ind_sample_time_first_arrival) * self.time_interval_seconds
-        two_way_time = self._time_axis_values_seconds[ind_sample_time_first_arrival:] + extra_time
-        slant_distance = (two_way_time * ground_velocity_m_per_s) / 2
-
-        # For near-surface where slant_distance < half_offset (geometrically impossible),
+        slant_distance = time_axis_values[num_samples_2nd_arrival:]*ground_velocity_m_per_s/2
         # clip to zero depth. This handles the "direct wave zone" near the surface.
-        self._depth_converted_meters[ind_sample_time_first_arrival:] = np.sqrt(np.maximum(slant_distance**2 - half_offset**2, 0))
+        self._depth_converted_meters[num_samples_2nd_arrival:] = np.sqrt(np.maximum(slant_distance**2 - half_offset**2, 0))
 
 
     def _resample_axis_values_4_display(self) -> None:
