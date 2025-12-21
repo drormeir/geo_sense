@@ -37,6 +37,14 @@ class OrmsbyFilter(BaseFilter):
 
     parameter_specs = [
         FilterParameterSpec(
+            name="taper",
+            display_name="Taper",
+            param_type=ParameterType.CHOICE,
+            default="cos2",
+            choices=["linear", "cos2", "hamming", "blackman"],
+            tooltip="Taper function for transition bands: linear, cos² (Hann), Hamming, Blackman"
+        ),
+        FilterParameterSpec(
             name="f1",
             display_name="F1 (Low Cut)",
             param_type=ParameterType.FLOAT,
@@ -83,14 +91,6 @@ class OrmsbyFilter(BaseFilter):
             decimals=1,
             units="Hz",
             tooltip="High cut frequency - end of ramp down"
-        ),
-        FilterParameterSpec(
-            name="taper",
-            display_name="Taper",
-            param_type=ParameterType.CHOICE,
-            default="cos2",
-            choices=["linear", "cos2", "hamming", "blackman"],
-            tooltip="Taper function for transition bands: linear, cos² (Hann), Hamming, Blackman"
         ),
     ]
 
