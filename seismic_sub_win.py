@@ -1036,7 +1036,9 @@ class SeismicSubWindow(UASSubWindow):
         """
         data = self._canvas_buffer
         if data is None or self._canvas_render_region is None:
-            assert self.raw_data is None, f"The only time this should happen is when the file is not loaded: {(self._canvas_buffer is None)=}, {self._canvas_render_region=}" 
+            assert self.raw_data is None,\
+                f"get_hover_info: {(self._canvas_buffer is None)=}, {(self._canvas_render_region is None)=}\n" +\
+                f"The only time this should happen is when the file is NOT loaded. However: {(self.raw_data is not None)=}" 
             return None
 
         hover_info = {}
@@ -1472,25 +1474,6 @@ class SeismicSubWindow(UASSubWindow):
         self._filters_dialog.show()
 
 
-    def _apply_filters(self) -> None:
-        """Apply filter pipeline and set the processed data."""
-        try:
-            # if raw_data is None, it will return None without raising an exception
-            self._processed_data = self._filter_pipeline.apply(self.raw_data, self.time_interval_seconds)
-        except Exception as e:
-            self._show_error("Error", f"Failed to apply filters: {e}")
-            return
-        self._file_region_clipped = None
-        self._canvas_render_region = None
-        self._canvas_buffer = None
-        if self._processed_data is None:
-            self._amplitude_min = 0.0
-            self._amplitude_max = 0.0
-            return
-        self._amplitude_min = float(np.min(self._processed_data))
-        self._amplitude_max = float(np.max(self._processed_data))
-
-
     def _apply_filters_and_render(self, pipeline_state: list) -> None:
         """Apply filter pipeline and update the display.
 
@@ -1509,6 +1492,24 @@ class SeismicSubWindow(UASSubWindow):
             # recreate canvas buffer according to the same file region clipped and file view region
             self._recreate_canvas_buffer()
         self._set_canvas_to_image()
+
+
+    def _apply_filters(self) -> None:
+        """Apply filter pipeline and set the processed data."""
+        try:
+            # if raw_data is None, it will return None without raising an exception
+            self._processed_data = self._filter_pipeline.apply(self.raw_data, self.time_interval_seconds)
+            assert (self._processed_data is None) == (self.raw_data is None), f'_apply_filters() {self._processed_data=} != {self.raw_data=}'
+        except Exception as e:
+            self._show_error("Error", f"Failed to apply filters: {e}")
+            return
+        self._canvas_buffer = None
+        if self._processed_data is None:
+            self._amplitude_min = 0.0
+            self._amplitude_max = 0.0
+            return
+        self._amplitude_min = float(np.min(self._processed_data))
+        self._amplitude_max = float(np.max(self._processed_data))
 
 
     def _replace_configure_subplots_action(self) -> None:
