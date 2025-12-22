@@ -399,6 +399,8 @@ class SeismicSubWindow(UASSubWindow):
 
     type_name = "seismic"
 
+    HOME_MODE_FIT = "fit"
+    HOME_MODE_1X1 = "1x1"
 
     def __init__(self, main_window: UASMainWindow, parent=None) -> None:
         # Call parent init (will call empty on_create)
@@ -435,7 +437,7 @@ class SeismicSubWindow(UASSubWindow):
         self._horizontal_indices_in_data_region: np.ndarray | None = None
         self._vertical_indices_in_data_region: np.ndarray | None = None
         # Home button mode: "fit" = fit to window, "1:1" = 1:1 pixels
-        self._home_mode: str = "fit"
+        self._home_mode: str = SeismicSubWindow.HOME_MODE_FIT
 
         # Display settings
         self._display_settings: dict[str, Any] = dict(DisplaySettingsDialog.default_settings)
@@ -628,15 +630,15 @@ class SeismicSubWindow(UASSubWindow):
         # Fit to Window option
         fit_to_window_action = QAction("Fit to Window", self)
         fit_to_window_action.setCheckable(True)
-        fit_to_window_action.setChecked(self._home_mode == "fit")
-        fit_to_window_action.triggered.connect(lambda: self._set_home_mode("fit"))
+        fit_to_window_action.setChecked(self._home_mode == SeismicSubWindow.HOME_MODE_FIT)
+        fit_to_window_action.triggered.connect(lambda: self._set_home_mode(SeismicSubWindow.HOME_MODE_FIT))
         home_menu.addAction(fit_to_window_action)
 
         # 1:1 Pixels option
         one_to_one_action = QAction("1:1 Pixels", self)
         one_to_one_action.setCheckable(True)
-        one_to_one_action.setChecked(self._home_mode == "1:1")
-        one_to_one_action.triggered.connect(lambda: self._set_home_mode("1:1"))
+        one_to_one_action.setChecked(self._home_mode == SeismicSubWindow.HOME_MODE_1X1)
+        one_to_one_action.triggered.connect(lambda: self._set_home_mode(SeismicSubWindow.HOME_MODE_1X1))
         home_menu.addAction(one_to_one_action)
 
         context_menu.addMenu(home_menu)
@@ -647,29 +649,55 @@ class SeismicSubWindow(UASSubWindow):
 
     def _set_home_mode(self, mode: str) -> None:
         """Set the home button behavior mode."""
+        if mode not in [SeismicSubWindow.HOME_MODE_FIT, SeismicSubWindow.HOME_MODE_1X1]:
+            return
         self._home_mode = mode
+        self._home()
 
 
     def _home(self) -> None:
-        self._set_view_file_region_by_mode()
+        self._reset_view_file_region_to_home()
         self._set_canvas_to_image()
 
+
+    def _update_image_extent_and_limits(self) -> None:
+        """Set image extent, limits, and aspect based on home mode."""
+        if self._image is None or self._canvas_buffer is None:
+            return
+        # Extent covers full buffer (what imshow displays)
+        h, w = self._canvas_buffer.shape
+        self._image.set_extent([-0.5, w - 0.5, h - 0.5, -0.5])
+        # xlim/ylim depend on home mode
+        if self._home_mode == SeismicSubWindow.HOME_MODE_1X1:
+            # 1:1 mode: show full buffer (data at actual pixel size with padding)
+            self._image_ax.set_xlim(-0.5, w - 0.5)
+            self._image_ax.set_ylim(h - 0.5, -0.5)  # Inverted
+        elif self._canvas_render_region is not None:
+            # Fit mode: show only the data region (fills the view)
+            x0, y0 = self._canvas_render_region.x0, self._canvas_render_region.y0
+            x1, y1 = self._canvas_render_region.x1, self._canvas_render_region.y1
+            self._image_ax.set_xlim(x0 - 0.5, x1 - 0.5)
+            self._image_ax.set_ylim(y1 - 0.5, y0 - 0.5)  # Inverted
+        # Always 'auto' - 1:1 pixel mapping is handled by resampling, not matplotlib aspect
+        self._image_ax.set_aspect('auto')
 
     def _set_canvas_to_image(self) -> None:
         """Set the canvas to the image."""
         if self._image is None or self._canvas_buffer is None:
             return
+        assert self._get_pixels_shape() == self._get_canvas_buffer_shape(), f'_set_canvas_to_image() shape mismatch: {self._get_pixels_shape()=} != {self._get_canvas_buffer_shape()=}'
         self._image.set_data(self._canvas_buffer)
+        self._update_image_extent_and_limits()
         self._image.set_clim(vmin=self._amplitude_min, vmax=self._amplitude_max)
         self._apply_image_four_axes_tick_settings()
         self._canvas.draw() # force draw
 
 
-    def _set_view_file_region_by_mode(self) -> None:
+    def _reset_view_file_region_to_home(self) -> None:
         """Set the view file region by mode."""
-        if self._home_mode == "fit":
+        if self._home_mode == SeismicSubWindow.HOME_MODE_FIT:
             self._file_view_region_fit_to_window()
-        elif self._home_mode == "1:1":
+        elif self._home_mode == SeismicSubWindow.HOME_MODE_1X1:
             self._file_view_region_one_to_one_pixels()
         self._resample_axis_values_4_display()
 
@@ -688,7 +716,7 @@ class SeismicSubWindow(UASSubWindow):
             self._canvas_buffer = np.empty(shape=canvas_shape, dtype=display_data.dtype)
             # without crop. only resize to allocated buffer.
             # dsize is (width, height), opposite of numpy shape (height, width)
-            cv2.resize(display_data, dsize=(canvas_shape[1], canvas_shape[0]), interpolation=cv2.INTER_LINEAR, dst=self._canvas_buffer)
+            cv2.resize(display_data, dsize=(canvas_shape[1], canvas_shape[0]), interpolation=cv2.INTER_CUBIC, dst=self._canvas_buffer)
         except Exception as e:
             self._show_error("Error", f"Failed to set file view region to fit to window: {e}")
             self._file_view_region = None
@@ -712,17 +740,59 @@ class SeismicSubWindow(UASSubWindow):
         self._file_view_region = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
         self._file_region_clipped = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
         self._canvas_render_region = Bbox([[0, 0], [render_shape[1], render_shape[0]]])
-        self._canvas_buffer = np.zeros(shape=canvas_shape, dtype=display_data.dtype)
+        self._canvas_buffer = np.full(shape=canvas_shape, fill_value=np.nan, dtype=np.float32)
         self._canvas_buffer[:render_shape[0], :render_shape[1]] = display_data[:render_shape[0], :render_shape[1]]
 
 
+    @staticmethod
+    def is_shape_within_shape(shape1: tuple[int, int], shape2: tuple[int, int]) -> bool:
+        """Check if shape1 is within shape2."""
+        return shape1[0] <= shape2[0] and shape1[1] <= shape2[1]
+
+
     def _get_pixels_shape(self) -> tuple[int, int]:
-        """Get the shape of the pixels in the canvas in pixels."""
+        """Get the shape of the image axes in screen pixels."""
         if self._image_ax is None:
             return (0, 0)
-        bbox = self._image_ax.get_window_extent()
+        renderer = self._canvas.get_renderer()
+        bbox = self._image_ax.get_window_extent(renderer=renderer)
         return (int(bbox.height), int(bbox.width))
 
+
+    def _get_file_shape(self) -> tuple[int, int]:
+        """Get the shape of the processed data in samples."""
+        if self._processed_data is None:
+            return (0, 0)
+        return (int(self._processed_data.shape[0]), int(self._processed_data.shape[1]))
+
+
+    def _get_file_view_region_shape(self) -> tuple[int, int]:
+        """Get the shape of the file view region in pixels."""
+        if self._file_view_region is None:
+            return (0, 0)
+        return (int(self._file_view_region.y1 - self._file_view_region.y0), int(self._file_view_region.x1 - self._file_view_region.x0))
+
+
+    def _get_file_region_clipped_shape(self) -> tuple[int, int]:
+        """Get the shape of the file region clipped in samples."""
+        if self._file_region_clipped is None:
+            return (0, 0)
+        return (int(self._file_region_clipped.y1 - self._file_region_clipped.y0), int(self._file_region_clipped.x1 - self._file_region_clipped.x0))
+
+
+    def _get_canvas_buffer_shape(self) -> tuple[int, int]:
+        """Get the shape of the canvas buffer."""
+        if self._canvas_buffer is None:
+            return (0, 0)
+        return (int(self._canvas_buffer.shape[0]), int(self._canvas_buffer.shape[1]))
+
+
+    def _get_canvas_render_region_shape(self) -> tuple[int, int]:
+        """Get the shape of the canvas render region."""
+        if self._canvas_render_region is None:
+            return (0, 0)
+        return (int(self._canvas_render_region.y1 - self._canvas_render_region.y0), int(self._canvas_render_region.x1 - self._canvas_render_region.x0))
+        
 
     def _on_scroll_zoom(self, event) -> None:
         """Handle mouse wheel scroll for zooming (like Google Maps)."""
@@ -762,7 +832,6 @@ class SeismicSubWindow(UASSubWindow):
         new_y1 = file_y_data + new_yrange_request * (1 - rel_y)
         self._set_file_view_region(new_x0, new_y0, new_x1, new_y1)
         self._recreate_canvas_buffer()
-        self._resample_axis_values_4_display()
         self._set_canvas_to_image()
 
 
@@ -770,7 +839,7 @@ class SeismicSubWindow(UASSubWindow):
         """Set the crop request."""
         if self._processed_data is None:
             return
-        file_shape = self._processed_data.shape
+        file_shape = self._get_file_shape()
 
         def fix_lim(lim0: float, lim1: float, shape: int) -> tuple[float, float]:
             if lim1 < lim0:
@@ -800,9 +869,20 @@ class SeismicSubWindow(UASSubWindow):
             return
 
         self._file_view_region = Bbox([[int(x0), int(y0)], [int(x1), int(y1)]])
-        self._file_region_clipped = Bbox([[max(0, int(x0)), max(0, int(y0))], [min(file_shape[1], int(x1)), min(file_shape[0], int(y1))]])
+        clipped_x0 = max(0, int(x0))
+        clipped_y0 = max(0, int(y0))
+        clipped_x1 = min(file_shape[1], int(x1))
+        clipped_y1 = min(file_shape[0], int(y1))
+        if self._home_mode == SeismicSubWindow.HOME_MODE_1X1:
+            display_shape = self._get_pixels_shape()
+            clipped_w = clipped_x1 - clipped_x0
+            clipped_h = clipped_y1 - clipped_y0
+            clipped_x1 = clipped_x0 + min(clipped_w, display_shape[1])
+            clipped_y1 = clipped_y0 + min(clipped_h, display_shape[0])
+        self._file_region_clipped = Bbox([[clipped_x0, clipped_y0], [clipped_x1, clipped_y1]])
         self._canvas_render_region = None
         self._canvas_buffer = None
+
 
     def _check_canvas_buffer_shape(self) -> None:
         """Check if the canvas render region is valid."""
@@ -814,7 +894,6 @@ class SeismicSubWindow(UASSubWindow):
         if self._canvas_buffer is not None and self._canvas_buffer.shape == pixels_shape:
             return
         self._recreate_canvas_buffer()
-        self._resample_axis_values_4_display()
 
 
     def _recreate_canvas_buffer(self) -> None:
@@ -824,17 +903,24 @@ class SeismicSubWindow(UASSubWindow):
             self._canvas_render_region = None
             self._canvas_buffer = None
             return
-        request_width = self._file_view_region.x1 - self._file_view_region.x0
-        request_height = self._file_view_region.y1 - self._file_view_region.y0
+        file_view_region_shape = self._get_file_view_region_shape()
+        request_height, request_width = file_view_region_shape
         pixels_shape = self._get_pixels_shape()
         try:
-            self._canvas_render_region = Bbox([
-                [int((self._file_region_clipped.x0 - self._file_view_region.x0)/request_width*pixels_shape[1]),
-                int((self._file_region_clipped.y0 - self._file_view_region.y0)/request_height*pixels_shape[0])],
-                [int((self._file_region_clipped.x1 - self._file_view_region.x0)/request_width*pixels_shape[1]),
-                int((self._file_region_clipped.y1 - self._file_view_region.y0)/request_height*pixels_shape[0])]
-                ])
-            self._canvas_buffer = np.zeros(shape=pixels_shape, dtype=display_data.dtype)
+            if self._home_mode == SeismicSubWindow.HOME_MODE_1X1:
+                # using clipped file region to create canvas render region
+                file_clipped_shape = self._get_file_region_clipped_shape()
+                assert SeismicSubWindow.is_shape_within_shape(file_clipped_shape, pixels_shape),\
+                    f'_recreate_canvas_buffer() {self._home_mode=} {file_clipped_shape=} < {pixels_shape=}'
+                self._canvas_render_region = Bbox([[0, 0], [file_clipped_shape[1], file_clipped_shape[0]]])
+            else:
+                self._canvas_render_region = Bbox([\
+                    [int((self._file_region_clipped.x0 - self._file_view_region.x0)/request_width*pixels_shape[1]),\
+                    int((self._file_region_clipped.y0 - self._file_view_region.y0)/request_height*pixels_shape[0])],\
+                    [int((self._file_region_clipped.x1 - self._file_view_region.x0)/request_width*pixels_shape[1]),\
+                    int((self._file_region_clipped.y1 - self._file_view_region.y0)/request_height*pixels_shape[0])]
+                    ])
+            self._canvas_buffer = np.full(shape=pixels_shape, fill_value=np.nan, dtype=np.float32)
             # dsize is (width, height), opposite of numpy shape (height, width)
             display_crop = self._canvas_render_region
             file_crop = self._file_region_clipped
@@ -843,8 +929,9 @@ class SeismicSubWindow(UASSubWindow):
             cv2.resize(\
                 src=display_data[int(file_crop.y0):int(file_crop.y1), int(file_crop.x0):int(file_crop.x1)],\
                 dsize=(dsize_width, dsize_height),\
-                interpolation=cv2.INTER_LINEAR,\
+                interpolation=cv2.INTER_CUBIC,\
                 dst=self._canvas_buffer[int(display_crop.y0):int(display_crop.y1), int(display_crop.x0):int(display_crop.x1)])
+            self._resample_axis_values_4_display()
         except Exception as e:
             self._show_error("Error", f"Failed to recreate canvas buffer: {e}")
             self._canvas_render_region = None
@@ -1027,7 +1114,6 @@ class SeismicSubWindow(UASSubWindow):
         if 'filter_pipeline' in state:
             self._filter_pipeline.deserialize(state['filter_pipeline'])
         self.load_file(state.get("filename", ""))
-        self._resample_axis_values_4_display()
         self._apply_image_four_axes_tick_settings()
         self.canvas_render()
 
@@ -1161,7 +1247,7 @@ class SeismicSubWindow(UASSubWindow):
             ind_sample_time_first_arrival = int(self._time_first_arrival_seconds / dt_seconds)
         self._update_first_arrival_sample(ind_sample_time_first_arrival)
         self._calculate_depth_converted()
-        self._set_view_file_region_by_mode() # creating the canvas buffer
+        self._reset_view_file_region_to_home() # creating the canvas buffer
         self.update_status(f"Loaded: {self.filename}")
         self.canvas_render()
         return True
@@ -1183,6 +1269,8 @@ class SeismicSubWindow(UASSubWindow):
         # Invalidate cached background since layout changes
         self._colorbar_background = None
         self._adjust_layout_with_fixed_margins()
+        self._recreate_canvas_buffer()
+        self._set_canvas_to_image()
 
 
     def _adjust_layout_with_fixed_margins(self) -> None:
@@ -1231,12 +1319,33 @@ class SeismicSubWindow(UASSubWindow):
         image_left = left_image_margin_px / width_px
         image_width = 1.0 - (left_image_margin_px + right_image_margin_px) / width_px
         self._image_ax.set_position([image_left, bottom, image_width, height])
-        self._canvas.draw_idle()
+        current_canvas_shape = self._get_canvas_buffer_shape()
+        if current_canvas_shape[0] == 0 or current_canvas_shape[1] == 0:
+            self._reset_view_file_region_to_home()
+            return
+        new_canvas_shape = self._get_pixels_shape()
+        if new_canvas_shape == current_canvas_shape:
+            self._canvas.draw_idle()
+            return
+        if self._home_mode == self.HOME_MODE_1X1:
+            pixels_shape = self._get_pixels_shape()
+            file_shape = self._get_file_shape()
+            new_file_view_region_shape = (min(pixels_shape[0], file_shape[0]), min(pixels_shape[1], file_shape[1]))
+            new_file_view_region_x0 = max(0, self._file_view_region.x0)
+            new_file_view_region_y0 = max(0, self._file_view_region.y0)
+            new_file_view_region_x1 = new_file_view_region_x0 + new_file_view_region_shape[1]
+            new_file_view_region_y1 = new_file_view_region_y0 + new_file_view_region_shape[0]
+            self._set_file_view_region(new_file_view_region_x0, new_file_view_region_y0, new_file_view_region_x1, new_file_view_region_y1)
+        else:
+            # keep the same file view region and the same file region clipped
+            pass
 
 
     def _on_global_settings_changed(self) -> None:
         """Callback when global settings change - update the layout."""
         self._adjust_layout_with_fixed_margins()
+        self._recreate_canvas_buffer()
+        self._set_canvas_to_image()
 
 
     def canvas_render(self) -> None:
@@ -1251,19 +1360,12 @@ class SeismicSubWindow(UASSubWindow):
         self._check_canvas_buffer_shape()
         if self._canvas_buffer is not None:
 
-            # Set axis limits based on buffer shape (not axes size which changes with colorbar)
-            if self._image_ax is not None:
-                height_px, width_px = self._get_pixels_shape()
-                if width_px > 0 and height_px > 0:
-
-                    self._image_ax.set_xlim(-0.5, width_px - 0.5)
-                    self._image_ax.set_ylim(height_px - 0.5, -0.5)  # Inverted
-
             # Apply colormap settings
             colormap = self._get_colormap()
 
             # Display the image (should not interpolate because data is already resampled)
-            self._image = self._image_ax.imshow(self._canvas_buffer, aspect="auto", cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max, interpolation='none')
+            self._image = self._image_ax.imshow(self._canvas_buffer, cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max, interpolation='none')
+            self._update_image_extent_and_limits()
 
             # Apply other display settings
             self._check_colorbar_ax_visibility()
@@ -1272,6 +1374,8 @@ class SeismicSubWindow(UASSubWindow):
             self._canvas.draw_idle()
 
         self._adjust_layout_with_fixed_margins()
+        self._recreate_canvas_buffer()
+        self._set_canvas_to_image()
 
         # Force canvas draw to initialize colorbar axis transforms
         self._canvas.draw()
@@ -1386,16 +1490,26 @@ class SeismicSubWindow(UASSubWindow):
         self._amplitude_min = float(np.min(self._processed_data))
         self._amplitude_max = float(np.max(self._processed_data))
 
+
     def _apply_filters_and_render(self, pipeline_state: list) -> None:
         """Apply filter pipeline and update the display.
 
         Args:
             pipeline_state: Serialized pipeline state to apply (list of filter dicts)
         """
+        before_apply_filters = self._get_file_shape()
         self._filter_pipeline.deserialize(pipeline_state)
         self._apply_filters()
-        self._set_view_file_region_by_mode()
+        # now canvas buffer is invalidated, we need to recreate it
+        after_apply_filters = self._get_file_shape()
+        if before_apply_filters != after_apply_filters:
+            # recreate canvas buffer according to home mode
+            self._reset_view_file_region_to_home()
+        else:
+            # recreate canvas buffer according to the same file region clipped and file view region
+            self._recreate_canvas_buffer()
         self._set_canvas_to_image()
+
 
     def _replace_configure_subplots_action(self) -> None:
         """Replace the 'Configure subplots' toolbar button with Display Settings."""
@@ -1518,6 +1632,8 @@ class SeismicSubWindow(UASSubWindow):
         self._display_settings['colorbar_visible'] = visible
         self._check_colorbar_ax_visibility()
         self._adjust_layout_with_fixed_margins()
+        self._recreate_canvas_buffer()
+        self._set_canvas_to_image()
 
 
 
