@@ -9,6 +9,11 @@ TIMEOUT_SEC=3
 
 cd "$PROJECT_DIR"
 
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
 passed=0
 failed=0
 
@@ -37,10 +42,10 @@ for subdir in filters/*/; do
         # Exit code 124 = timeout (window opened, waiting for user) = success
         # Exit code 0 = completed normally = success
         if [[ $exit_code -eq 124 ]] || [[ $exit_code -eq 0 ]]; then
-            echo "OK"
+            echo -e "${GREEN}PASS${NC}"
             ((passed++))
         else
-            echo "FAILED (exit code: $exit_code)"
+            echo -e "${RED}FAIL${NC} (exit code: $exit_code)"
             echo "$output" | head -5
             ((failed++))
         fi
@@ -49,8 +54,12 @@ done
 
 echo ""
 echo "=============================="
-echo "Passed: $passed"
-echo "Failed: $failed"
+echo -e "${GREEN}Passed: $passed${NC}"
+if [[ $failed -gt 0 ]]; then
+    echo -e "${RED}Failed: $failed${NC}"
+else
+    echo "Failed: $failed"
+fi
 echo "=============================="
 
 [[ $failed -eq 0 ]] && exit 0 || exit 1

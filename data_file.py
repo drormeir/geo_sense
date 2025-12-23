@@ -139,7 +139,7 @@ class DataFile:
                     delay_ms = trace_header[segyio.TraceField.DelayRecordingTime]
                     if delay_ms > 0:
                         self.trace_time_delays_seconds[i] = delay_ms / 1000.0  # Convert milliseconds to seconds
-                    self.trace_offset_meters[i] = trace_header[segyio.TraceField.Offset] * factor_length_2_mks
+                    self.trace_offset_meters[i] = trace_header[segyio.TraceField.offset] * factor_length_2_mks
 
                     x, y = trace_header[segyio.TraceField.CDP_X], trace_header[segyio.TraceField.CDP_Y]
                     if not isinstance(x, float) or not isinstance(y, float):
@@ -203,7 +203,7 @@ class DataFile:
                     if self.trace_time_delays_seconds is not None and i < len(self.trace_time_delays_seconds):
                         f.header[i][segyio.TraceField.DelayRecordingTime] = int(self.trace_time_delays_seconds[i] * 1000)  # Convert to ms
                     if self.trace_offset_meters is not None and i < len(self.trace_offset_meters):
-                        f.header[i][segyio.TraceField.Offset] = int(self.trace_offset_meters[i])
+                        f.header[i][segyio.TraceField.offset] = int(self.trace_offset_meters[i])
                     if self.trace_coords_meters is not None and i < len(self.trace_coords_meters):
                         # Use scalar of -100 for centimeter precision
                         f.header[i][segyio.TraceField.SourceGroupScalar] = -100
@@ -359,3 +359,51 @@ class DataFile:
         return True
 
 
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) != 2:
+        print(f"Usage: python {sys.argv[0]} <filename>")
+        sys.exit(1)
+
+    filename = sys.argv[1]
+    df = DataFile(filename)
+
+    if not df.load():
+        print(f"Error: {df.error}")
+        sys.exit(1)
+
+    print(f"File: {df.filename}")
+    print(f"Format: {df.file_extension.upper()}")
+    print()
+    print("=== Data Statistics ===")
+    print(f"Data shape: {df.data.shape} (samples x traces)")
+    print(f"Data type: {df.data.dtype}")
+    print(f"Data range: [{df.data.min():.6g}, {df.data.max():.6g}]")
+    print()
+    print("=== Time ===")
+    print(f"Time interval: {df.time_interval_seconds * 1e9:.3f} ns")
+    print(f"Time delay: {df.time_delay_seconds * 1e9:.3f} ns")
+    print(f"Time window: {df.time_interval_seconds * (df.data.shape[0] - 1) * 1e9:.3f} ns")
+    print()
+    print("=== Spatial ===")
+    print(f"Offset: {df.offset_meters:.6f} m")
+    if df.trace_coords_meters is not None:
+        dist = df.trace_cumulative_distances_meters()
+        if dist is not None:
+            print(f"Distance range: [{dist[0]:.3f}, {dist[-1]:.3f}] m")
+            if len(dist) > 1:
+                intervals = np.diff(dist)
+                print(f"Trace spacing: {np.median(intervals):.6f} m (median)")
+    print()
+    print("=== Antenna ===")
+    if df.antenna_frequencies_hz:
+        freqs = [f/1e6 for f in df.antenna_frequencies_hz]
+        print(f"Antenna frequency: {freqs} MHz")
+    else:
+        print("Antenna frequency: not available")
+    print()
+    if df.info:
+        print("=== Header Info ===")
+        for key, value in df.info.items():
+            print(f"  {key}: {value}")

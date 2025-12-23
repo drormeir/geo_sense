@@ -42,12 +42,20 @@ def simple_interpolation(vec: np.ndarray|None, float_index: float|None) -> float
 def interpolate_inplace_nan_values(vec: np.ndarray) -> None:
     """
     Interpolate in place the nan values of a vector.
+    If all values are NaN, fills with zeros. If no values are NaN, does nothing.
     """
     assert vec.ndim == 1 or vec.ndim == 2
     is_nan = np.isnan(vec)
     if vec.ndim == 2:
         is_nan = is_nan.any(axis=1)
     assert is_nan.shape == (vec.shape[0],)
+    # Early return if no NaN values
+    if not is_nan.any():
+        return
+    # If all values are NaN, fill with zeros
+    if is_nan.all():
+        vec.fill(0.0)
+        return
     arrange_indices = np.arange(vec.shape[0])
     nan_indices = arrange_indices[is_nan]
     non_nan_indices = arrange_indices[~is_nan]
