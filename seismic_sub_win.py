@@ -1219,7 +1219,7 @@ class SeismicSubWindow(UASSubWindow):
         # complete load file
         ############################################################
         self._apply_filters() # apply filters to the data to get the processed data
-        self._trace_cumulative_distances_meters = self._data_file.trace_comulative_distances_meters()
+        self._trace_cumulative_distances_meters = self._data_file.trace_cumulative_distances_meters()
 
         # Calculate time range in seconds
         dt_seconds = self._data_file.time_interval_seconds

@@ -1,3 +1,4 @@
+import re
 from gprpy.toolbox.gprIO_MALA import readMALA
 import numpy as np
 import os
@@ -28,7 +29,8 @@ class DataFile:
         self.trace_coords_meters : np.ndarray | None = None
         self.offset_meters : float = 0.0
         self.time_delay_seconds : float = 0.0
-        self.antenna_frequency_hz : float = 0.0
+        self.antenna_frequencies_hz : list[float] = []
+        self.info : dict[str, str] = {}
 
 
     def load(self) -> bool:
@@ -76,7 +78,7 @@ class DataFile:
         return False
 
 
-    def trace_comulative_distances_meters(self) -> np.ndarray|None:
+    def trace_cumulative_distances_meters(self) -> np.ndarray|None:
         # Calculate cumulative distances along the survey line
         # Distance from trace i-1 to trace i for each trace
         if self.trace_coords_meters is None or self.trace_coords_meters.size == 0:
@@ -110,12 +112,12 @@ class DataFile:
                 sweep_freq_start = f.bin[segyio.BinField.SweepFrequencyStart]
                 sweep_freq_end = f.bin[segyio.BinField.SweepFrequencyEnd]
                 if sweep_freq_start > 0 and sweep_freq_end > 0:
-                    # Use center frequency if both are set
-                    self.antenna_frequency_hz = (sweep_freq_start + sweep_freq_end) / 2.0
+                    # Store both start and end frequencies
+                    self.antenna_frequencies_hz = [float(sweep_freq_start), float(sweep_freq_end)]
                 elif sweep_freq_start > 0:
-                    self.antenna_frequency_hz = float(sweep_freq_start)
+                    self.antenna_frequencies_hz = [float(sweep_freq_start)]
                 elif sweep_freq_end > 0:
-                    self.antenna_frequency_hz = float(sweep_freq_end)
+                    self.antenna_frequencies_hz = [float(sweep_freq_end)]
 
                 # Try to extract trace coordinates from trace headers
                 num_traces = len(f.trace)
@@ -140,19 +142,22 @@ class DataFile:
                     self.trace_offset_meters[i] = trace_header[segyio.TraceField.Offset] * factor_length_2_mks
 
                     x, y = trace_header[segyio.TraceField.CDP_X], trace_header[segyio.TraceField.CDP_Y]
-                    if np.isnan(x) or np.isnan(y) or (x == 0 and y == 0):
+                    if not isinstance(x, float) or not isinstance(y, float):
+                        x = float(x)
+                        y = float(y)
+                    # Skip invalid coordinates
+                    if (x == 0 and y == 0) or not np.isfinite(x) or not np.isfinite(y):
                         continue
                     count_valid_coords += 1
                     scalar = trace_header[segyio.TraceField.SourceGroupScalar]
                     if scalar < 0:
-                        x /= abs(scalar)
-                        y /= abs(scalar)
+                        scalar = 1/abs(float(scalar))
                     elif scalar > 0:
-                        x *= float(scalar)
-                        y *= float(scalar)
+                        scalar = float(scalar)
                     else:
-                        # ignore scalar or treat it as 1.0
-                        pass
+                        scalar = 1.0
+                    x *= float(scalar)
+                    y *= float(scalar)
                     coord_units = trace_header[segyio.TraceField.CoordinateUnits]
                     if coord_units in DataFile.segy_coord_unit_map:
                         if DataFile.segy_coord_unit_map[coord_units] == "length":
@@ -175,7 +180,7 @@ class DataFile:
 
 
     def _save_segy_data(self) -> bool:
-        # Create a minimal SEGY file with current data
+        # Create SEGY file with data and metadata
         try:
             spec = segyio.spec()
             spec.samples = range(self.data.shape[0])
@@ -183,8 +188,28 @@ class DataFile:
             spec.format = 1  # 4-byte IBM float
 
             with segyio.create(self.filename, spec) as f:
+                # Write binary header metadata
+                f.bin[segyio.BinField.Interval] = int(self.time_interval_seconds * 1_000_000)  # Convert to microseconds
+                f.bin[segyio.BinField.MeasurementSystem] = 1  # MKS (all data stored in meters)
+                if self.antenna_frequencies_hz:
+                    f.bin[segyio.BinField.SweepFrequencyStart] = int(self.antenna_frequencies_hz[0])
+                    if len(self.antenna_frequencies_hz) > 1:
+                        f.bin[segyio.BinField.SweepFrequencyEnd] = int(self.antenna_frequencies_hz[-1])
+
+                # Write trace data and headers
                 for i, trace in enumerate(self.data.T):
                     f.trace[i] = trace
+                    # Write trace header metadata
+                    if self.trace_time_delays_seconds is not None and i < len(self.trace_time_delays_seconds):
+                        f.header[i][segyio.TraceField.DelayRecordingTime] = int(self.trace_time_delays_seconds[i] * 1000)  # Convert to ms
+                    if self.trace_offset_meters is not None and i < len(self.trace_offset_meters):
+                        f.header[i][segyio.TraceField.Offset] = int(self.trace_offset_meters[i])
+                    if self.trace_coords_meters is not None and i < len(self.trace_coords_meters):
+                        # Use scalar of -100 for centimeter precision
+                        f.header[i][segyio.TraceField.SourceGroupScalar] = -100
+                        f.header[i][segyio.TraceField.CDP_X] = int(self.trace_coords_meters[i, 0] * 100)
+                        f.header[i][segyio.TraceField.CDP_Y] = int(self.trace_coords_meters[i, 1] * 100)
+                        f.header[i][segyio.TraceField.CoordinateUnits] = 1  # length (meters)
 
         except Exception as e:
             self.error = f"Error saving SEGY file: {str(e)}"
@@ -198,7 +223,7 @@ class DataFile:
     def _load_mala_data(self) -> bool:
         try:
             file_base, _ = os.path.splitext(self.filename)
-            data, info = readMALA(file_base)
+            data, _ = readMALA(file_base)
             self.data = np.array(data)
             if self.data is None or self.data.size == 0:
                 self.error = "No data found in MALA file"
@@ -206,9 +231,15 @@ class DataFile:
             nt, nx = self.data.shape
 
             # Extract metadata from MALA header
+            self.info = {}
+            with open(file_base + '.rad', 'r') as f:
+                for line in f:
+                    if ':' in line:
+                        key, value = line.split(':', 1) # split on first colon
+                        self.info[key.strip()] = value.strip()
             # Calculate sample interval (dt) from TIMEWINDOW and SAMPLES
             # TIMEWINDOW is in nanoseconds
-            timewindow_ns = float(info.get('TIMEWINDOW', 0))
+            timewindow_ns = float(self.info.get('TIMEWINDOW', 0))
             if timewindow_ns > 0 and nt > 1:
                 dt_ns = timewindow_ns / (nt - 1)
                 self.time_interval_seconds = dt_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
@@ -217,21 +248,60 @@ class DataFile:
 
             # Extract signal position (time zero offset) from MALA header
             # SIGNAL POSITION is in nanoseconds
-            signal_position_ns = float(info.get('SIGNAL POSITION', 0))
+            signal_position_ns = float(self.info.get('SIGNAL POSITION', 0))
             self.time_delay_seconds = signal_position_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
-            self.offset_meters = float(info.get('OFFSET', 0))
 
             # Extract antenna frequency from MALA header (in MHz, convert to Hz)
-            antenna_mhz = float(info.get('ANTENNA', 0))
-            self.antenna_frequency_hz = antenna_mhz * 1_000_000.0  # Convert MHz to Hz
+            antenna_type = self.info.get('ANTENNAS', None)
+            if antenna_type is None:
+                self.error = "Antenna type is not set in MALA file"
+                return False
+            antenna_type = antenna_type.lower()
+            if 'ghz' in antenna_type:
+                antenna_ghz = antenna_type.split('ghz')[0].strip()
+                antenna_ghz = float(antenna_ghz)
+                self.antenna_frequencies_hz = [antenna_ghz * 1_000_000_000.0]
+            elif 'mhz' in antenna_type:
+                antenna_mhz = antenna_type.split('mhz')[0].strip()
+                antenna_mhz = float(antenna_mhz)
+                self.antenna_frequencies_hz = [antenna_mhz * 1_000_000.0]
+            elif 'khz' in antenna_type:
+                antenna_kHz = antenna_type.split('khz')[0].strip()
+                antenna_kHz = float(antenna_kHz)
+                self.antenna_frequencies_hz = [antenna_kHz * 1_000.0]
+            elif 'hz' in antenna_type:
+                antenna_Hz = antenna_type.split('hz')[0].strip()
+                antenna_Hz = float(antenna_Hz)
+                self.antenna_frequencies_hz = [antenna_Hz]
+            else:
+                # replace all non-numeric characters with spaces (keep digits, dots, e, +, -)
+                antenna_frequency_str = re.sub(r'[^0-9.e+-]', ' ', antenna_type)
+                frequency_candidates = [float(f) for f in antenna_frequency_str.split() if f.strip()]
+                if not frequency_candidates:
+                    self.error = f"Could not parse antenna frequency from: {antenna_type}"
+                    return False
+                antenna_frequency_mhz = max(frequency_candidates)
+                self.antenna_frequencies_hz = [antenna_frequency_mhz * 1_000_000.0]
 
             # Distance interval from MALA header
-            distance_interval = float(info.get('DISTANCE INTERVAL', 0))
+            distance_interval = float(self.info.get('DISTANCE INTERVAL', 0))
             if distance_interval <= 0:
                 self.error = "Distance interval is not set in MALA file"
                 return False
-            # Create linear coordinates based on distance interval
-            x_coords = np.arange(nx) * distance_interval
+            # read distance interval units from MALA header and convert to MKS
+            distance_interval_units = self.info.get('LENGTH UNITS', 'm')
+            if distance_interval_units == 'm':
+                file_unit_system = UnitSystem.MKS
+            elif distance_interval_units == 'ft':
+                file_unit_system = UnitSystem.IMPERIAL
+            else:
+                self.error = f"Unsupported distance interval units: {distance_interval_units}"
+                return False
+            factor_length_2_mks = UnitSystem.convert_length_factor(file_unit_system, UnitSystem.MKS)
+            # Convert offset to meters
+            self.offset_meters = float(self.info.get('OFFSET', 0)) * factor_length_2_mks
+            # Create linear coordinates based on distance interval (in meters)
+            x_coords = np.arange(nx) * distance_interval * factor_length_2_mks
             self.trace_coords_meters = np.column_stack([x_coords, np.zeros_like(x_coords)])
         except Exception as e:
             self.error = f"Error loading MALA file: {str(e)}"
@@ -243,12 +313,46 @@ class DataFile:
 
     def _save_mala_data(self) -> bool:
         try:
+            # Save the data file
             if self.file_extension == 'rd3':
                 data_normalized = self.data / np.max(np.abs(self.data))
                 data_int16 = (data_normalized * 32767).astype(np.int16)
                 data_int16.T.tofile(self.filename)
             else:
                 self.data.T.tofile(self.filename)
+
+            # Save the .rad header file
+            file_base, _ = os.path.splitext(self.filename)
+            rad_filename = file_base + '.rad'
+
+            # Update self.info with current values (all stored in MKS)
+            nt, nx = self.data.shape
+            self.info['SAMPLES'] = str(nt)
+            # TIMEWINDOW in nanoseconds
+            timewindow_ns = self.time_interval_seconds * (nt - 1) * 1_000_000_000.0
+            self.info['TIMEWINDOW'] = f"{timewindow_ns:.6f}"
+            # SIGNAL POSITION in nanoseconds
+            self.info['SIGNAL POSITION'] = f"{self.time_delay_seconds * 1_000_000_000.0:.6f}"
+            # DISTANCE INTERVAL in meters
+            if self.trace_coords_meters is not None and nx > 1:
+                distance_interval = np.median(np.diff(self.trace_coords_meters[:, 0]))
+                self.info['DISTANCE INTERVAL'] = f"{distance_interval:.10f}"
+            self.info['LENGTH UNITS'] = 'm'
+            self.info['OFFSET'] = f"{self.offset_meters:.6f}"
+            self.info['LAST TRACE'] = str(nx)
+            # Antenna frequency in MHz
+            if self.antenna_frequencies_hz:
+                antenna_mhz = self.antenna_frequencies_hz[0] / 1_000_000.0
+                if antenna_mhz >= 1000:
+                    self.info['ANTENNAS'] = f"{antenna_mhz / 1000:.1f} GHz"
+                else:
+                    self.info['ANTENNAS'] = f"{antenna_mhz:.0f} MHz"
+
+            # Write the .rad file
+            with open(rad_filename, 'w') as f:
+                for key, value in self.info.items():
+                    f.write(f"{key}:{value}\n")
+
         except Exception as e:
             self.error = f"Error saving MALA file: {str(e)}"
             return False
