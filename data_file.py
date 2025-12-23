@@ -106,7 +106,7 @@ class DataFile:
 
     @property
     def has_valid_trace_coords(self) -> bool:
-        return self.trace_coords_meters is not None and self.trace_coords_meters.dim == 2 and\
+        return self.trace_coords_meters is not None and self.trace_coords_meters.ndim == 2 and\
             self.trace_coords_meters.shape[1] == 2 and self.trace_coords_meters.shape[0] >= 1
 
 
