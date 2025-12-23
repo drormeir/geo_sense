@@ -759,13 +759,6 @@ class SeismicSubWindow(UASSubWindow):
         return (int(bbox.height), int(bbox.width))
 
 
-    def _get_file_shape(self) -> tuple[int, int]:
-        """Get the shape of the processed data in samples."""
-        if self._processed_data is None:
-            return (0, 0)
-        return (int(self._processed_data.shape[0]), int(self._processed_data.shape[1]))
-
-
     def _get_file_view_region_shape(self) -> tuple[int, int]:
         """Get the shape of the file view region in pixels."""
         if self._file_view_region is None:
@@ -839,7 +832,7 @@ class SeismicSubWindow(UASSubWindow):
         """Set the crop request."""
         if self._processed_data is None:
             return
-        file_shape = self._get_file_shape()
+        file_shape = self.processed_shape
 
         def fix_lim(lim0: float, lim1: float, shape: int) -> tuple[float, float]:
             if lim1 < lim0:
@@ -970,6 +963,36 @@ class SeismicSubWindow(UASSubWindow):
     def offset_meters(self) -> float:
         """Get the Tx-Rx offset in meters."""
         return self._data_file.offset_meters if self._data_file is not None else 0.0
+
+
+    @property
+    def raw_data_shape(self) -> tuple[int, int]:
+        """Get the shape of the raw data."""
+        return self._data_file.data.shape if self._data_file is not None and self._data_file.data is not None else (0, 0)
+
+
+    @property
+    def processed_shape(self) -> tuple[int, int]:
+        """Get the shape of the processed data in samples."""
+        if self._processed_data is None:
+            return (0, 0)
+        return (int(self._processed_data.shape[0]), int(self._processed_data.shape[1]))
+
+
+    @property
+    def antenna_frequencies_hz(self) -> list[float]:
+        """Get the antenna frequencies in Hz."""
+        if self._data_file is None or self._data_file.antenna_frequencies_hz is None:
+            return []
+        return self._data_file.antenna_frequencies_hz
+
+
+    @property
+    def distance_interval_meters(self) -> float:
+        """Get the distance interval in meters."""
+        if self._data_file is None or self._data_file.trace_coords_meters is None:
+            return 0.0
+        return np.median(np.diff(self._data_file.trace_coords_meters[:, 0]))
 
 
     def _motion_notify_event(self, event) -> None:
@@ -1219,8 +1242,8 @@ class SeismicSubWindow(UASSubWindow):
         # complete load file
         ############################################################
         self._apply_filters() # apply filters to the data to get the processed data
-        self._trace_cumulative_distances_meters = self._data_file.trace_cumulative_distances_meters()
-
+        self._trace_cumulative_distances_meters = self._data_file.trace_cumulative_distances_meters
+        self._trace_interval_meters = self._data_file.trace_interval_meters
         # Calculate time range in seconds
         dt_seconds = self._data_file.time_interval_seconds
         nt = self.raw_data.shape[0]
@@ -1331,7 +1354,7 @@ class SeismicSubWindow(UASSubWindow):
             return
         if self._home_mode == self.HOME_MODE_1X1:
             pixels_shape = self._get_pixels_shape()
-            file_shape = self._get_file_shape()
+            file_shape = self.processed_shape
             new_file_view_region_shape = (min(pixels_shape[0], file_shape[0]), min(pixels_shape[1], file_shape[1]))
             new_file_view_region_x0 = max(0, self._file_view_region.x0)
             new_file_view_region_y0 = max(0, self._file_view_region.y0)
@@ -1480,11 +1503,11 @@ class SeismicSubWindow(UASSubWindow):
         Args:
             pipeline_state: Serialized pipeline state to apply (list of filter dicts)
         """
-        before_apply_filters = self._get_file_shape()
+        before_apply_filters = self.processed_shape
         self._filter_pipeline.deserialize(pipeline_state)
         self._apply_filters()
         # now canvas buffer is invalidated, we need to recreate it
-        after_apply_filters = self._get_file_shape()
+        after_apply_filters = self.processed_shape
         if before_apply_filters != after_apply_filters:
             # recreate canvas buffer according to home mode
             self._reset_view_file_region_to_home()

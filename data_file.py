@@ -78,18 +78,36 @@ class DataFile:
         return False
 
 
+    @property
+    def trace_interval_meters(self) -> float:
+        """Get the interval between adjacent traces in meters."""
+        trace_distances_meters = self.trace_distances_meters
+        if trace_distances_meters is None or trace_distances_meters.size < 1:
+            return 0.0
+        return np.median(trace_distances_meters)
+
+
+    @property
     def trace_cumulative_distances_meters(self) -> np.ndarray|None:
         # Calculate cumulative distances along the survey line
         # Distance from trace i-1 to trace i for each trace
-        if self.trace_coords_meters is None or self.trace_coords_meters.size == 0:
-            return None
-        try:
-            trace_distances_meters = np.sqrt(np.sum(np.diff(self.trace_coords_meters, axis=0)**2, axis=1))
-            # Cumulative sum with 0.0 prepended for first trace
-            return np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
-        except Exception as e:
-            error_message = f"Error calculating trace cumulative distances: {str(e)}"
-            raise Exception(error_message)
+        trace_distances_meters = self.trace_distances_meters
+        # Cumulative sum with 0.0 prepended for first trace
+        return np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
+
+
+    @property
+    def trace_distances_meters(self) -> np.ndarray:
+        """Get the distances between adjacent traces in meters."""
+        if not self.has_valid_trace_coords:
+            return np.empty(shape=(0,))
+        return np.sqrt(np.sum(np.diff(self.trace_coords_meters, axis=0)**2, axis=1))
+
+
+    @property
+    def has_valid_trace_coords(self) -> bool:
+        return self.trace_coords_meters is not None and self.trace_coords_meters.dim == 2 and\
+            self.trace_coords_meters.shape[1] == 2 and self.trace_coords_meters.shape[0] >= 1
 
 
     ################### SEGY file functions ###################
@@ -389,7 +407,7 @@ if __name__ == "__main__":
     print("=== Spatial ===")
     print(f"Offset: {df.offset_meters:.6f} m")
     if df.trace_coords_meters is not None:
-        dist = df.trace_cumulative_distances_meters()
+        dist = df.trace_cumulative_distances_meters
         if dist is not None:
             print(f"Distance range: [{dist[0]:.3f}, {dist[-1]:.3f}] m")
             if len(dist) > 1:
