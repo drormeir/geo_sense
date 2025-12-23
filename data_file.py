@@ -28,6 +28,7 @@ class DataFile:
         self.trace_coords_meters : np.ndarray | None = None
         self.offset_meters : float = 0.0
         self.time_delay_seconds : float = 0.0
+        self.antenna_frequency_hz : float = 0.0
 
 
     def load(self) -> bool:
@@ -104,6 +105,17 @@ class DataFile:
                     self.error = "Sample interval is not set in SEGY file"
                     return False
                 self.time_interval_seconds = dt_us / 1_000_000.0  # Convert microseconds to seconds
+
+                # Try to extract frequency from sweep frequency fields (sometimes used for antenna freq)
+                sweep_freq_start = f.bin[segyio.BinField.SweepFrequencyStart]
+                sweep_freq_end = f.bin[segyio.BinField.SweepFrequencyEnd]
+                if sweep_freq_start > 0 and sweep_freq_end > 0:
+                    # Use center frequency if both are set
+                    self.antenna_frequency_hz = (sweep_freq_start + sweep_freq_end) / 2.0
+                elif sweep_freq_start > 0:
+                    self.antenna_frequency_hz = float(sweep_freq_start)
+                elif sweep_freq_end > 0:
+                    self.antenna_frequency_hz = float(sweep_freq_end)
 
                 # Try to extract trace coordinates from trace headers
                 num_traces = len(f.trace)
@@ -208,6 +220,10 @@ class DataFile:
             signal_position_ns = float(info.get('SIGNAL POSITION', 0))
             self.time_delay_seconds = signal_position_ns / 1_000_000_000.0  # Convert nanoseconds to seconds
             self.offset_meters = float(info.get('OFFSET', 0))
+
+            # Extract antenna frequency from MALA header (in MHz, convert to Hz)
+            antenna_mhz = float(info.get('ANTENNA', 0))
+            self.antenna_frequency_hz = antenna_mhz * 1_000_000.0  # Convert MHz to Hz
 
             # Distance interval from MALA header
             distance_interval = float(info.get('DISTANCE INTERVAL', 0))
