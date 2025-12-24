@@ -4,6 +4,7 @@ FIR (Finite Impulse Response) filter for seismic/GPR data.
 Supports multiple design methods: Window, Least-squares, Parks-McClellan.
 """
 
+from typing import Any
 import numpy as np
 from scipy.signal import firwin, firls, remez, lfilter
 
@@ -53,11 +54,11 @@ class FIRFilter(BaseFilter):
             display_name="Low Cutoff",
             param_type=ParameterType.FLOAT,
             default=10.0,
-            min_value=0.1,
-            max_value=10000.0,
-            step=1.0,
-            decimals=1,
-            units="Hz",
+            min_value=1,
+            max_value=10000,
+            step=10,
+            decimals=0,
+            units="MHz",
             tooltip="Low cutoff frequency"
         ),
         FilterParameterSpec(
@@ -65,11 +66,11 @@ class FIRFilter(BaseFilter):
             display_name="High Cutoff",
             param_type=ParameterType.FLOAT,
             default=100.0,
-            min_value=0.1,
-            max_value=10000.0,
-            step=1.0,
-            decimals=1,
-            units="Hz",
+            min_value=1,
+            max_value=10000,
+            step=10,
+            decimals=0,
+            units="MHz",
             tooltip="High cutoff frequency"
         ),
         FilterParameterSpec(
@@ -92,8 +93,19 @@ class FIRFilter(BaseFilter):
         ),
     ]
 
-    def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:
+    def reset_defaults_from_data(self, data_info: dict[str, Any]) -> None:
+        """Reset filter parameters to sensible defaults based on data characteristics."""
+
+        self._antenna_frequencies_hz = data_info['antenna_frequencies_hz']
+        self.set_parameter("low_freq", self._antenna_frequencies_hz[0]*0.5 / 1_000_000.0)
+        self.set_parameter("high_freq", self._antenna_frequencies_hz[-1]*5.0 / 1_000_000.0)
+
+
+    def apply(self, data: np.ndarray|None, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
         """Apply FIR filter to seismic data."""
+        if data is None or data.size == 0:
+            return data, shape_interval
+
         design = self.get_parameter("design")
         window = self.get_parameter("window")
         low_freq = self.get_parameter("low_freq")
@@ -106,6 +118,7 @@ class FIRFilter(BaseFilter):
             num_taps += 1
 
         # Calculate Nyquist frequency
+        sample_interval = shape_interval[0]
         fs = 1.0 / sample_interval
         nyquist = fs / 2.0
 
@@ -134,7 +147,8 @@ class FIRFilter(BaseFilter):
             # Backward filter (reverse, filter, reverse)
             result[:, i] = lfilter(coeffs, 1.0, filtered[::-1])[::-1]
 
-        return result
+        return result, shape_interval
+
 
     def _design_window(self, filter_type: str, low_freq: float, high_freq: float,
                        num_taps: int, nyquist: float, window: str) -> np.ndarray:
@@ -249,9 +263,9 @@ class FIRFilter(BaseFilter):
         for design in designs:
             filt = cls(low_freq=low_freq, high_freq=high_freq,
                        num_taps=num_taps, design=design)
-            impulse_response = filt.apply(impulse, sample_interval)
+            impulse_response, _ = filt.apply(impulse, (sample_interval,1.0))
             responses[design] = np.abs(fft(impulse_response[:, 0]))
-            filtered_results[design] = filt.apply(data, sample_interval)
+            filtered_results[design], _ = filt.apply(data, (sample_interval,1.0))
 
         # Build line specs for each plot
         filtered_lines = [
