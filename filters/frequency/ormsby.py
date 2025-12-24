@@ -5,6 +5,7 @@ The Ormsby filter is a trapezoidal bandpass filter defined by four
 corner frequencies that create a smooth frequency response.
 """
 
+from typing import Any
 import numpy as np
 from scipy.fft import fft, ifft, fftfreq
 
@@ -30,9 +31,9 @@ class OrmsbyFilter(BaseFilter):
         Ramps 1→0 from f3 to f4 (using selected taper)
         0 at f > f4
     """
-
+    f1234_ratios = np.array([0.2, 0.5, 1.5, 1.8]) # ratios of f1, f2, f3, f4 to the base frequency
     category = "Frequency"
-    filter_name = "Ormsby"
+    filter_name = "Ormsby (Bandpass)"
     description = "Trapezoidal bandpass filter with four corner frequencies"
 
     parameter_specs = [
@@ -48,48 +49,48 @@ class OrmsbyFilter(BaseFilter):
             name="f1",
             display_name="F1 (Low Cut)",
             param_type=ParameterType.FLOAT,
-            default=5.0,
-            min_value=0.1,
-            max_value=10000.0,
-            step=1.0,
-            decimals=1,
-            units="Hz",
+            default=5,
+            min_value=1,
+            max_value=10000,
+            step=10,
+            decimals=0,
+            units="MHz",
             tooltip="Low cut frequency - start of ramp up"
         ),
         FilterParameterSpec(
             name="f2",
             display_name="F2 (Low Pass)",
             param_type=ParameterType.FLOAT,
-            default=10.0,
-            min_value=0.1,
-            max_value=10000.0,
-            step=1.0,
-            decimals=1,
-            units="Hz",
+            default=10,
+            min_value=1,
+            max_value=10000,
+            step=10,
+            decimals=0,
+            units="MHz",
             tooltip="Low pass frequency - end of ramp up"
         ),
         FilterParameterSpec(
             name="f3",
             display_name="F3 (High Pass)",
             param_type=ParameterType.FLOAT,
-            default=60.0,
-            min_value=0.1,
-            max_value=10000.0,
-            step=1.0,
-            decimals=1,
-            units="Hz",
+            default=60,
+            min_value=1,
+            max_value=10000,
+            step=10,
+            decimals=0,
+            units="MHz",
             tooltip="High pass frequency - start of ramp down"
         ),
         FilterParameterSpec(
             name="f4",
             display_name="F4 (High Cut)",
             param_type=ParameterType.FLOAT,
-            default=80.0,
-            min_value=0.1,
-            max_value=10000.0,
-            step=1.0,
-            decimals=1,
-            units="Hz",
+            default=80,
+            min_value=1,
+            max_value=10000,
+            step=10,
+            decimals=0,
+            units="MHz",
             tooltip="High cut frequency - end of ramp down"
         ),
     ]
@@ -120,12 +121,36 @@ class OrmsbyFilter(BaseFilter):
         else:
             return x
 
-    def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:
+
+    def reset_defaults_from_data(self, data_info: dict[str, Any]) -> None:
+        """Reset filter parameters to sensible defaults based on data characteristics."""
+
+        self._antenna_frequencies_hz = data_info['antenna_frequencies_hz']
+
+        if self._antenna_frequencies_hz:
+            base_frequency = np.array(self._antenna_frequencies_hz)
+            if len(base_frequency) < 1:
+                return
+            if len(base_frequency) == 1:
+                base_frequency = np.array([base_frequency[0]]*4)
+            else:
+                # use first and last frequencies as base frequencies    
+                f2 = base_frequency[0] / OrmsbyFilter.f1234_ratios[1]
+                f3 = base_frequency[-1] / OrmsbyFilter.f1234_ratios[2]
+                base_frequency = np.array([f2, f2, f3, f3])
+            frequencies_mhz = np.round(base_frequency * OrmsbyFilter.f1234_ratios / 1_000_000.0) # convert to MHz and round to int
+            self.set_parameter("f1", frequencies_mhz[0])
+            self.set_parameter("f2", frequencies_mhz[1])
+            self.set_parameter("f3", frequencies_mhz[2])
+            self.set_parameter("f4", frequencies_mhz[3])
+
+
+    def apply(self, data: np.ndarray, shape_interval: tuple[float,float]) -> tuple[np.ndarray, tuple[float,float]]:
         """Apply Ormsby bandpass filter to seismic data."""
-        f1 = self.get_parameter("f1")
-        f2 = self.get_parameter("f2")
-        f3 = self.get_parameter("f3")
-        f4 = self.get_parameter("f4")
+        f1 = self.get_parameter("f1")*1_000_000.0 # convert to Hz
+        f2 = self.get_parameter("f2")*1_000_000.0 # convert to Hz
+        f3 = self.get_parameter("f3")*1_000_000.0 # convert to Hz
+        f4 = self.get_parameter("f4")*1_000_000.0 # convert to Hz
         taper = self.get_parameter("taper")
 
         # Ensure frequencies are in order: f1 < f2 <= f3 < f4
@@ -142,7 +167,7 @@ class OrmsbyFilter(BaseFilter):
         nt = data.shape[0]
 
         # Calculate frequency array for FFT
-        freqs = np.abs(fftfreq(nt, d=sample_interval))
+        freqs = np.abs(fftfreq(nt, d=shape_interval[0]))
 
         # Build frequency response
         response = np.zeros(nt)
@@ -170,7 +195,7 @@ class OrmsbyFilter(BaseFilter):
         # Inverse FFT (take real part)
         result = np.real(ifft(filtered_spectrum, axis=0))
 
-        return result
+        return result, shape_interval
 
     @classmethod
     def demo(cls) -> None:

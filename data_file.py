@@ -27,6 +27,9 @@ class DataFile:
         self.trace_time_delays_seconds : np.ndarray | None = None
         self.trace_offset_meters : np.ndarray | None = None
         self.trace_coords_meters : np.ndarray | None = None
+        self.trace_distances_meters : np.ndarray | None = None
+        self.trace_cumulative_distances_meters : np.ndarray | None = None
+        self.trace_interval_meters : float = 0.0
         self.offset_meters : float = 0.0
         self.time_delay_seconds : float = 0.0
         self.antenna_frequencies_hz : list[float] = []
@@ -48,13 +51,7 @@ class DataFile:
             self.error = "Unsupported file extension"
             return False
         if self.data is not None:
-            self.data = self.data.astype(np.float32)
-        if self.trace_time_delays_seconds is not None:
-            self.trace_time_delays_seconds = self.trace_time_delays_seconds.astype(np.float32)
-        if self.trace_offset_meters is not None:
-            self.trace_offset_meters = self.trace_offset_meters.astype(np.float32)
-        if self.trace_coords_meters is not None:
-            self.trace_coords_meters = self.trace_coords_meters.astype(np.float32)
+            self.data = self.data.astype(dtype=float)
         return True
 
 
@@ -78,39 +75,7 @@ class DataFile:
         return False
 
 
-    @property
-    def trace_interval_meters(self) -> float:
-        """Get the interval between adjacent traces in meters."""
-        trace_distances_meters = self.trace_distances_meters
-        if trace_distances_meters is None or trace_distances_meters.size < 1:
-            return 0.0
-        return np.median(trace_distances_meters)
-
-
-    @property
-    def trace_cumulative_distances_meters(self) -> np.ndarray|None:
-        # Calculate cumulative distances along the survey line
-        # Distance from trace i-1 to trace i for each trace
-        trace_distances_meters = self.trace_distances_meters
-        # Cumulative sum with 0.0 prepended for first trace
-        return np.cumsum(np.concatenate([[0.0], trace_distances_meters]))
-
-
-    @property
-    def trace_distances_meters(self) -> np.ndarray:
-        """Get the distances between adjacent traces in meters."""
-        if not self.has_valid_trace_coords:
-            return np.empty(shape=(0,))
-        return np.sqrt(np.sum(np.diff(self.trace_coords_meters, axis=0)**2, axis=1))
-
-
-    @property
-    def has_valid_trace_coords(self) -> bool:
-        return self.trace_coords_meters is not None and self.trace_coords_meters.ndim == 2 and\
-            self.trace_coords_meters.shape[1] == 2 and self.trace_coords_meters.shape[0] >= 1
-
-
-    ################### SEGY file functions ###################
+   ################### SEGY file functions ###################
     def _load_segy_data(self) -> bool:
         try:
             with segyio.open(self.filename, "r", ignore_geometry=True) as f:
@@ -185,12 +150,18 @@ class DataFile:
 
                 interpolate_inplace_nan_values(self.trace_time_delays_seconds)
                 interpolate_inplace_nan_values(self.trace_offset_meters)
-                self.offset_meters = np.median(self.trace_offset_meters)
-                self.time_delay_seconds = np.median(self.trace_time_delays_seconds)
+                self.offset_meters = np.nanmedian(self.trace_offset_meters) if np.any(np.isfinite(self.trace_offset_meters)) else 0.0
+                self.time_delay_seconds = np.nanmedian(self.trace_time_delays_seconds) if np.any(np.isfinite(self.trace_time_delays_seconds)) else 0.0
                 if not count_valid_coords:
-                    self.error = "No trace coordinates found in SEGY file"
-                    return False
-                interpolate_inplace_nan_values(self.trace_coords_meters)
+                    # No trace coordinates found - create synthetic coordinates based on trace numbers
+                    # Use 1 meter per trace as default spacing
+                    self.trace_coords_meters = np.column_stack([np.arange(num_traces, dtype=float), np.zeros(num_traces)])
+                    self.trace_interval_meters = 1.0
+                else:
+                    interpolate_inplace_nan_values(self.trace_coords_meters)
+                    self.trace_interval_meters = np.median(np.sqrt(np.sum(np.diff(self.trace_coords_meters, axis=0)**2, axis=1)))
+                self.trace_distances_meters = np.sqrt(np.sum(np.diff(self.trace_coords_meters, axis=0)**2, axis=1))
+                self.trace_cumulative_distances_meters = np.cumsum(np.concatenate([[0.0], self.trace_distances_meters]))
         except Exception as e:
             self.error = f"Error loading SEGY file: {str(e)}"
             return False
@@ -247,7 +218,7 @@ class DataFile:
                 self.error = "No data found in MALA file"
                 return False
             nt, nx = self.data.shape
-
+            
             # Extract metadata from MALA header
             self.info = {}
             with open(file_base + '.rad', 'r') as f:
@@ -301,11 +272,6 @@ class DataFile:
                 antenna_frequency_mhz = max(frequency_candidates)
                 self.antenna_frequencies_hz = [antenna_frequency_mhz * 1_000_000.0]
 
-            # Distance interval from MALA header
-            distance_interval = float(self.info.get('DISTANCE INTERVAL', 0))
-            if distance_interval <= 0:
-                self.error = "Distance interval is not set in MALA file"
-                return False
             # read distance interval units from MALA header and convert to MKS
             distance_interval_units = self.info.get('LENGTH UNITS', 'm')
             if distance_interval_units == 'm':
@@ -318,16 +284,22 @@ class DataFile:
             factor_length_2_mks = UnitSystem.convert_length_factor(file_unit_system, UnitSystem.MKS)
             # Convert offset to meters
             self.offset_meters = float(self.info.get('OFFSET', 0)) * factor_length_2_mks
+
+            # Distance interval from MALA header
+            distance_interval = float(self.info.get('DISTANCE INTERVAL', 0))
+            if distance_interval <= 0:
+                self.error = "Distance interval is not set in MALA file"
+                return False
+            self.trace_interval_meters = distance_interval * factor_length_2_mks
+            self.trace_distances_meters = np.full(nx-1, fill_value=self.trace_interval_meters)
             # Create linear coordinates based on distance interval (in meters)
-            x_coords = np.arange(nx) * distance_interval * factor_length_2_mks
-            self.trace_coords_meters = np.column_stack([x_coords, np.zeros_like(x_coords)])
+            self.trace_cumulative_distances_meters = np.arange(nx) * self.trace_interval_meters
+            self.trace_coords_meters = np.column_stack([self.trace_cumulative_distances_meters, np.zeros(nx)])
         except Exception as e:
             self.error = f"Error loading MALA file: {str(e)}"
             return False
         return True
         
-
-
 
     def _save_mala_data(self) -> bool:
         try:

@@ -7,6 +7,7 @@ Provides:
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
+import matplotlib.pyplot as plt
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -19,6 +20,7 @@ from PySide6.QtCore import Qt
 from .registry import FilterRegistry
 from .base import BaseFilter, FilterParameterSpec, ParameterType
 from .pipeline import FilterPipeline
+
 
 if TYPE_CHECKING:
     from seismic_sub_win import SeismicSubWindow
@@ -62,9 +64,49 @@ class FiltersDialog(QDialog):
         self._current_filter_class: type[BaseFilter] | None = None
         self._param_widgets: dict[str, QWidget] = {}
 
+        # Cache data characteristics for resetting filter defaults
+        self._data_info: dict[str, Any] = {}
+        self._extract_data_characteristics()
+
+        # Cache data-based defaults for all registered filter types (computed once per file)
+        self._cached_defaults: dict[str, dict[str, Any]] = {}
+        if not getattr(self._parent, '_filters_defaults_initialized', False):
+            self._compute_all_filter_defaults()
+            self._parent._filters_defaults_initialized = True
+            self._parent._cached_filter_defaults = self._cached_defaults
+        else:
+            self._cached_defaults = getattr(self._parent, '_cached_filter_defaults', {})
+
         self._create_ui()
         self._populate_categories()
         self._update_pipeline_list()
+
+
+    def _extract_data_characteristics(self) -> None:
+        """Extract data characteristics from parent SeismicSubWindow into _data_info dict."""
+        self._data_info.clear()
+        if self._parent is None:
+            return
+        self._data_info['sample_interval_seconds'] = self._parent.time_interval_seconds
+        self._data_info['antenna_frequencies_hz'] = self._parent.antenna_frequencies_hz
+        self._data_info['raw_data_shape'] = self._parent.raw_data_shape
+        self._data_info['trace_interval_meters'] = self._parent._trace_interval_meters
+
+    def _compute_all_filter_defaults(self) -> None:
+        """Compute data-based defaults for all registered filter types."""
+        self._cached_defaults.clear()
+        for filter_name in self._registry.get_all_filter_names():
+            filter_class = self._registry.get_filter_class(filter_name)
+            temp_filter = filter_class()
+            temp_filter.reset_defaults_from_data(self._data_info)
+            self._cached_defaults[filter_name] = temp_filter.parameters
+
+    def _get_cached_default(self, filter_name: str, param_name: str, fallback: Any) -> Any:
+        """Get cached data-based default for a parameter, or fallback."""
+        if filter_name in self._cached_defaults:
+            return self._cached_defaults[filter_name].get(param_name, fallback)
+        return fallback
+
 
     def _create_ui(self) -> None:
         """Build the dialog UI."""
@@ -116,8 +158,18 @@ class FiltersDialog(QDialog):
 
         # === Parameters Group ===
         self._params_group = QGroupBox("Parameters")
+        params_group_layout = QVBoxLayout()
+
         self._params_layout = QFormLayout()
-        self._params_group.setLayout(self._params_layout)
+        params_group_layout.addLayout(self._params_layout)
+
+        # Reset button
+        self._reset_params_btn = QPushButton("Reset")
+        self._reset_params_btn.setToolTip("Reset parameters to defaults based on current data")
+        self._reset_params_btn.clicked.connect(self._reset_params_to_data_defaults)
+        params_group_layout.addWidget(self._reset_params_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self._params_group.setLayout(params_group_layout)
         layout.addWidget(self._params_group)
 
         # === Pipeline Group ===
@@ -223,17 +275,39 @@ class FiltersDialog(QDialog):
         if self._current_filter_class is None:
             return
 
-        # Create widget for each parameter
+        filter_name = self._current_filter_class.filter_name
+
+        # Create widget for each parameter using cached data-based defaults
         for spec in self._current_filter_class.parameter_specs:
-            widget = self._create_param_widget(spec)
+            default_value = self._get_cached_default(filter_name, spec.name, spec.default)
+            widget = self._create_param_widget(spec, default_value)
             label = spec.display_name
             if spec.units:
                 label += f" [{spec.units}]"
             self._params_layout.addRow(label + ":", widget)
             self._param_widgets[spec.name] = widget
 
-    def _create_param_widget(self, spec: FilterParameterSpec) -> QWidget:
-        """Create appropriate widget for a parameter spec."""
+    def _reset_params_to_data_defaults(self) -> None:
+        """Reset current parameter widgets to data-based defaults."""
+        if self._current_filter_class is None:
+            return
+
+        # Create temp filter and reset its defaults based on data
+        temp_filter = self._current_filter_class()
+        temp_filter.reset_defaults_from_data(self._data_info)
+
+        # Load the reset values into widgets
+        self._load_params_to_widgets(temp_filter.parameters)
+
+    def _create_param_widget(self, spec: FilterParameterSpec, default_value: Any = None) -> QWidget:
+        """Create appropriate widget for a parameter spec.
+
+        Args:
+            spec: The parameter specification
+            default_value: Optional override for the default value (uses spec.default if None)
+        """
+        value = default_value if default_value is not None else spec.default
+
         if spec.param_type == ParameterType.INT:
             widget = QSpinBox()
             widget.setRange(
@@ -242,7 +316,7 @@ class FiltersDialog(QDialog):
             )
             if spec.step:
                 widget.setSingleStep(int(spec.step))
-            widget.setValue(int(spec.default))
+            widget.setValue(int(value))
             widget.setToolTip(spec.tooltip)
             return widget
 
@@ -255,26 +329,26 @@ class FiltersDialog(QDialog):
             widget.setDecimals(spec.decimals)
             if spec.step:
                 widget.setSingleStep(float(spec.step))
-            widget.setValue(float(spec.default))
+            widget.setValue(float(value))
             widget.setToolTip(spec.tooltip)
             return widget
 
         elif spec.param_type == ParameterType.CHOICE:
             widget = QComboBox()
             widget.addItems(spec.choices or [])
-            widget.setCurrentText(str(spec.default))
+            widget.setCurrentText(str(value))
             widget.setToolTip(spec.tooltip)
             return widget
 
         elif spec.param_type == ParameterType.BOOL:
             widget = QCheckBox()
-            widget.setChecked(bool(spec.default))
+            widget.setChecked(bool(value))
             widget.setToolTip(spec.tooltip)
             return widget
 
         else:  # STRING
             widget = QLineEdit()
-            widget.setText(str(spec.default))
+            widget.setText(str(value))
             widget.setToolTip(spec.tooltip)
             return widget
 
@@ -347,9 +421,6 @@ class FiltersDialog(QDialog):
 
         if not self._current_filter_class.has_demo():
             return
-
-        import matplotlib.pyplot as plt
-        from .base import BaseFilter
 
         # Set flag so show_demo_plot() knows not to call plt.show()
         BaseFilter._demo_called_from_ui = True
@@ -435,6 +506,7 @@ class FiltersDialog(QDialog):
             self._current_filter_class is not None
             and self._current_filter_class.has_demo()
         )
+        self._reset_params_btn.setEnabled(self._current_filter_class is not None)
         self._move_up_btn.setEnabled(has_selection)
         self._move_down_btn.setEnabled(has_selection)
         self._remove_btn.setEnabled(has_selection)

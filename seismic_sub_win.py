@@ -98,6 +98,7 @@ class DisplaySettingsDialog(QDialog):
         'right': AxisType.DEPTH,
         'colormap': 'seismic',
         'flip_colormap': False,
+        'symmetric_colormap': False,
         'colorbar_visible': True,
         'file_name_in_plot': True,
         'top_major_tick': 10.0,
@@ -261,6 +262,14 @@ class DisplaySettingsDialog(QDialog):
         flip_checkbox_layout.addWidget(self.flip_colormap_checkbox)
         colormap_layout.addLayout(flip_checkbox_layout)
 
+        # Symetric colormap checkbox
+        symmetric_colormap_checkbox_layout = QHBoxLayout(alignment=Qt.AlignCenter)
+        self.symmetric_colormap_checkbox = QCheckBox("Symmetric colormap")
+        self.symmetric_colormap_checkbox.setChecked(current_settings['symmetric_colormap'])
+        self.symmetric_colormap_checkbox.stateChanged.connect(self._update_colormap)
+        symmetric_colormap_checkbox_layout.addWidget(self.symmetric_colormap_checkbox)
+        colormap_layout.addLayout(symmetric_colormap_checkbox_layout)
+
         colormap_group.setLayout(colormap_layout)
         layout.addWidget(colormap_group)
 
@@ -312,7 +321,12 @@ class DisplaySettingsDialog(QDialog):
     def _update_colormap(self):
         self._old_settings['colormap'] = self.colormap_combo.currentText()
         self._old_settings['flip_colormap'] = self.flip_colormap_checkbox.isChecked()
-        self._parent._update_colormap(scheme = self.colormap_combo.currentText(), flip = self.flip_colormap_checkbox.isChecked())
+        self._old_settings['symmetric_colormap'] = self.symmetric_colormap_checkbox.isChecked()
+        self._parent._update_colormap(\
+            scheme = self.colormap_combo.currentText(),\
+            flip = self.flip_colormap_checkbox.isChecked(),\
+            symmetric = self.symmetric_colormap_checkbox.isChecked()\
+        )
 
     def _on_file_name_in_plot_settings_changed(self):
         self._old_settings['file_name_in_plot'] = self.file_name_in_plot_checkbox.isChecked()
@@ -374,6 +388,7 @@ class DisplaySettingsDialog(QDialog):
             'colorbar_visible': self.colorbar_visible_checkbox.isChecked(),
             'colormap': self.colormap_combo.currentText(),
             'flip_colormap': self.flip_colormap_checkbox.isChecked(),
+            'symmetric_colormap': self.symmetric_colormap_checkbox.isChecked(),
             'ind_sample_time_first_arrival': self.ind_sample_time_first_arrival_spinbox.value(),
         }
         ret.update(velocity_settings)
@@ -438,7 +453,8 @@ class SeismicSubWindow(UASSubWindow):
         self._vertical_indices_in_data_region: np.ndarray | None = None
         # Home button mode: "fit" = fit to window, "1:1" = 1:1 pixels
         self._home_mode: str = SeismicSubWindow.HOME_MODE_FIT
-
+        self._processed_shape_interval: tuple[float,float] = (0.0, 0.0)
+        self._trace_interval_meters: float = 0.0
         # Display settings
         self._display_settings: dict[str, Any] = dict(DisplaySettingsDialog.default_settings)
 
@@ -688,8 +704,10 @@ class SeismicSubWindow(UASSubWindow):
         assert self._get_pixels_shape() == self._get_canvas_buffer_shape(), f'_set_canvas_to_image() shape mismatch: {self._get_pixels_shape()=} != {self._get_canvas_buffer_shape()=}'
         self._image.set_data(self._canvas_buffer)
         self._update_image_extent_and_limits()
-        self._image.set_clim(vmin=self._amplitude_min, vmax=self._amplitude_max)
+        vmin, vmax = self._get_vmin_vmax()
+        self._image.set_clim(vmin=vmin, vmax=vmax)
         self._apply_image_four_axes_tick_settings()
+        self._update_colorbar_ticks()
         self._canvas.draw() # force draw
 
 
@@ -913,7 +931,7 @@ class SeismicSubWindow(UASSubWindow):
                     [int((self._file_region_clipped.x1 - self._file_view_region.x0)/request_width*pixels_shape[1]),\
                     int((self._file_region_clipped.y1 - self._file_view_region.y0)/request_height*pixels_shape[0])]
                     ])
-            self._canvas_buffer = np.full(shape=pixels_shape, fill_value=np.nan, dtype=np.float32)
+            self._canvas_buffer = np.full(shape=pixels_shape, fill_value=np.nan, dtype=display_data.dtype)
             # dsize is (width, height), opposite of numpy shape (height, width)
             display_crop = self._canvas_render_region
             file_crop = self._file_region_clipped
@@ -1234,6 +1252,8 @@ class SeismicSubWindow(UASSubWindow):
         self._amplitude_min = 0.0
         self._amplitude_max = 0.0
         self._image = None
+        self._processed_shape_interval = (0.0, 0.0)
+        self._trace_interval_meters = 0.0
         self._display_settings['ind_sample_time_first_arrival'] = None
         self._filter_pipeline.clear()
         self._remove_colorbar_indicator()
@@ -1387,15 +1407,16 @@ class SeismicSubWindow(UASSubWindow):
 
             # Apply colormap settings
             colormap = self._get_colormap()
-
+            vmin, vmax = self._get_vmin_vmax()
             # Display the image (should not interpolate because data is already resampled)
-            self._image = self._image_ax.imshow(self._canvas_buffer, cmap=colormap, vmin=self._amplitude_min, vmax=self._amplitude_max, interpolation='none')
+            self._image = self._image_ax.imshow(self._canvas_buffer, cmap=colormap, vmin=vmin, vmax=vmax, interpolation='none')
             self._update_image_extent_and_limits()
 
             # Apply other display settings
             self._check_colorbar_ax_visibility()
             self._update_file_name_in_plot(None)
             self._apply_image_four_axes_tick_settings()
+            self._update_colorbar_ticks()
             self._canvas.draw_idle()
 
         self._adjust_layout_with_fixed_margins()
@@ -1521,7 +1542,7 @@ class SeismicSubWindow(UASSubWindow):
         """Apply filter pipeline and set the processed data."""
         try:
             # if raw_data is None, it will return None without raising an exception
-            self._processed_data = self._filter_pipeline.apply(self.raw_data, self.time_interval_seconds)
+            self._processed_data, self._processed_shape_interval = self._filter_pipeline.apply(self.raw_data, (self.time_interval_seconds, self._trace_interval_meters))
             assert (self._processed_data is None) == (self.raw_data is None), f'_apply_filters() {self._processed_data=} != {self.raw_data=}'
         except Exception as e:
             self._show_error("Error", f"Failed to apply filters: {e}")
@@ -1629,13 +1650,17 @@ class SeismicSubWindow(UASSubWindow):
         self._settings_dialog = None
 
 
-    def _update_colormap(self, scheme: str|None, flip: bool|None):
+    def _update_colormap(self, scheme: str|None, flip: bool|None, symmetric: bool|None):
         if scheme:
             self._display_settings['colormap'] = scheme
         if flip is not None: # work for both values of flip (True/False)
             self._display_settings['flip_colormap'] = flip
+        if symmetric is not None:
+            self._display_settings['symmetric_colormap'] = symmetric
         if self._image is None:
             return
+        vmin, vmax = self._get_vmin_vmax()
+        self._image.set_clim(vmin=vmin, vmax=vmax)
         # Update the image colormap
         self._image.set_cmap(self._get_colormap())
         # Invalidate cached background (colorbar appearance changed)
@@ -1649,6 +1674,14 @@ class SeismicSubWindow(UASSubWindow):
         if self._display_settings['flip_colormap']:
             colormap = colormap + '_r'
         return colormap
+
+
+    def _get_vmin_vmax(self) -> tuple[float, float]:
+        if self._display_settings.get('symmetric_colormap', False):
+            max_abs_amplitude = max(abs(self._amplitude_min), abs(self._amplitude_max))
+            return -max_abs_amplitude, max_abs_amplitude
+        return self._amplitude_min, self._amplitude_max
+
 
     def _set_colorbar_visibility(self, visible: bool|int):
         if isinstance(visible, int):
@@ -1781,16 +1814,37 @@ class SeismicSubWindow(UASSubWindow):
             return
         self._remove_colorbar_indicator()
         self._colorbar = self._fig.colorbar(self._image, cax=self._colorbar_ax, label="Amplitude [mV]")
-        colorbar_ticks = list(self._colorbar.get_ticks())
-        # assuming the colorbar ticks are already sorted, add min and max if not already present
-        delta_amplitude = (self._amplitude_max - self._amplitude_min) * 0.05
-        # remove ticks that are too close to the min and max
-        while colorbar_ticks and colorbar_ticks[0] <= self._amplitude_min + delta_amplitude:
-            colorbar_ticks = colorbar_ticks[1:]
-        while colorbar_ticks and colorbar_ticks[-1] >= self._amplitude_max - delta_amplitude:
-            colorbar_ticks = colorbar_ticks[:-1]
-        colorbar_ticks = [self._amplitude_min] + colorbar_ticks + [self._amplitude_max]
-        self._colorbar.set_ticks(colorbar_ticks)
+        self._update_colorbar_ticks()
+
+
+    def _update_colorbar_ticks(self) -> None:
+        if self._colorbar is None:
+            return
+        vmin, vmax = self._get_vmin_vmax()
+        v_abs_max = max(abs(vmax), abs(vmin))
+        if v_abs_max <= 1e-9*v_abs_max:
+            self._colorbar.set_ticks([np.round((vmin+vmax)/2.0, decimals=3)])
+            return
+        num_ticks = 10
+        v_delta = v_abs_max / num_ticks
+        v_delta = 10**np.ceil(np.log10(v_delta))
+        v_min_n = int(vmin/v_delta)
+        v_max_n = int(vmax/v_delta)
+        v_ticks = np.arange(v_min_n, v_max_n+1) * v_delta
+        if len(v_ticks) < 2:
+            print(f"Warning: Only {len(v_ticks)} ticks found for colorbar, using default ticks. {vmin=} {vmax=} {v_delta=} {v_min_n=} {v_max_n=}")
+            v_ticks = np.array([])
+        else:
+            v_eps = v_delta * 0.1
+            if v_ticks[0] < vmin + v_eps:
+                # first tick is too close to the min, remove it
+                v_ticks = v_ticks[1:]
+            if v_ticks[-1] > vmax - v_eps:
+                # last tick is too close to the max, remove it
+                v_ticks = v_ticks[:-1]
+        v_ticks = np.array([np.round(vmin, decimals=3)] + v_ticks.tolist() + [np.round(vmax, decimals=3)])
+        assert len(v_ticks) <= num_ticks*2+3, f"Number of colorbar ticks ({len(v_ticks)}) exceeds maximum allowed ({num_ticks*2+3})"
+        self._colorbar.set_ticks(v_ticks)
 
 
     def _create_colorbar_indicator(self, amplitude: float|None) -> None:

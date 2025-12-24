@@ -414,6 +414,23 @@ class BaseFilter(ABC):
         """Check if this filter has a custom demo implementation."""
         return cls.demo is not BaseFilter.demo
 
+    def reset_defaults_from_data(self, data_info: dict[str, Any]) -> None:
+        """
+        Reset filter parameters to sensible defaults based on data characteristics.
+
+        Override in subclasses to set frequency-dependent or data-dependent
+        default values. The base implementation does nothing.
+
+        Args:
+            data_info: Dictionary with data characteristics. Common keys:
+                - sample_interval_seconds: float - Time interval between samples
+                - antenna_frequencies_hz: list[float] - Antenna frequencies
+                - num_samples: int - Number of time samples
+                - num_traces: int - Number of traces
+                - nyquist_hz: float - Nyquist frequency (0.5 / sample_interval)
+        """
+        pass
+
     @abstractmethod
     def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:
         """

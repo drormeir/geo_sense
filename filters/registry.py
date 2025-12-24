@@ -83,6 +83,10 @@ class FilterRegistry:
         """Get filter names for a category (sorted)."""
         return sorted(self._by_category.get(category, {}).keys())
 
+    def get_all_filter_names(self) -> list[str]:
+        """Get all registered filter names (sorted)."""
+        return sorted(self._by_name.keys())
+
     def get_filter_class(self, filter_name: str) -> Type[BaseFilter]:
         """Get filter class by filter_name (globally unique)."""
         if filter_name not in self._by_name:

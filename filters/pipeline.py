@@ -86,24 +86,24 @@ class FilterPipeline:
         """Remove all filters."""
         self._filters.clear()
 
-    def apply(self, data: np.ndarray|None, sample_interval: float) -> np.ndarray|None:
+    def apply(self, data: np.ndarray|None, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
         """
         Apply all filters in sequence.
 
         Args:
             data: Input seismic data (nt x nx)
-            sample_interval: Time between samples in seconds
+            shape_interval: the intervals of the data (dt, dx)
 
         Returns:
-            Filtered data
+            Filtered data and the new shape interval (dt, dx)
         """
         if data is None or len(self._filters) == 0:
-            return data
+            return data, shape_interval # return the original data and shape interval if no filters are applied
 
         result = data.copy()  # Don't modify original
         for filter_instance in self._filters:
-            result = filter_instance.apply(result, sample_interval)
-        return result
+            result, shape_interval = filter_instance.apply(result, shape_interval)
+        return result, shape_interval # return the filtered data and the new shape interval (dt, dx)
 
     def serialize(self) -> list[dict[str, Any]]:
         """Serialize pipeline for persistence."""

@@ -40,16 +40,18 @@ class BGRFilter(BaseFilter):
             param_type=ParameterType.CHOICE,
             default="mean",
             choices=["mean", "median"],
-            tooltip="mean: average trace; median: more robust to outliers"
+            tooltip=\
+                "mean:   subtracts the average trace\n"+\
+                "median: subtracts the median trace. More robust to outliers."
         ),
         FilterParameterSpec(
             name="num_traces",
             display_name="Number of Traces",
             param_type=ParameterType.INT,
-            default=0,
+            default=10,
             min_value=0,
-            max_value=10000,
-            step=10,
+            max_value=100000,
+            step=100,
             tooltip="Number of traces to use for background (0 = all traces)"
         ),
         FilterParameterSpec(
