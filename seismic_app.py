@@ -4,13 +4,23 @@ Seismic Viewer Application using UAS Framework.
 A seismic data visualization application that demonstrates the UAS framework
 with SEGY file support using matplotlib for rendering.
 
-Run with: python seismic_app.py
+Run with: python seismic_app.py [OPTIONS] [FILE]
 
 Command-line options:
+  FILE                   Seismic file to open (SEGY .sgy/.segy, MALA .rd3/.rd7)
+                         The file is opened IN ADDITION to any windows restored
+                         from the session. Use --session-mode -1 or 0 to start
+                         fresh with only the specified file.
   --test-mode            Run in test mode (minimal GUI, faster startup)
   --auto-exit SECONDS    Automatically exit after N seconds (for testing)
   --session-mode MODE    Session mode: -1=no read/write, 0=write only, 1=normal (default)
   --screenshot PATH      Save screenshot to PATH after startup (for debugging GUI)
+
+Session and FILE interaction:
+  - Default (--session-mode 1): Session windows are restored, then FILE is opened
+    as an additional window. Result: N session windows + 1 file window.
+  - With --session-mode -1: No session is loaded, only FILE is opened.
+  - With --session-mode 0: No session is loaded, FILE is opened, session saved on exit.
 """
 
 from typing import Any
@@ -54,6 +64,7 @@ class SeismicMainWindow(UASMainWindow):
     type_name = "seismic_main"
     _pending_screenshot_path = None  # Class variable for passing screenshot path
     _pending_auto_exit_seconds = None  # Class variable for auto-exit timer
+    _pending_file_path = None  # Class variable for passing file to load
 
     def __init__(self, parent=None, screenshot_path: str = None) -> None:
         background = os.path.join(os.path.dirname(__file__), "Geo_Sense.png")
@@ -68,6 +79,10 @@ class SeismicMainWindow(UASMainWindow):
         # Check for pending auto-exit timer
         self._auto_exit_seconds = self.__class__._pending_auto_exit_seconds
         self.__class__._pending_auto_exit_seconds = None  # Clear after use
+
+        # Check for pending file to load
+        self._pending_file = self.__class__._pending_file_path
+        self.__class__._pending_file_path = None  # Clear after use
 
     def _setup_menus(self) -> None:
         """Set up the menu bar with File menu and seismic-specific actions."""
@@ -135,6 +150,11 @@ class SeismicMainWindow(UASMainWindow):
         """Handle window show event - take screenshot and setup auto-exit if requested."""
         super().showEvent(event)
 
+        # Load file from command line if specified
+        if self._pending_file:
+            # Schedule file loading after event loop starts
+            QTimer.singleShot(0, self._load_pending_file)
+
         if self._screenshot_path:
             # Schedule screenshot after a short delay to ensure window is fully rendered
             QTimer.singleShot(500, self._take_screenshot)
@@ -143,6 +163,24 @@ class SeismicMainWindow(UASMainWindow):
             # Schedule auto-exit timer (must be done after event loop starts)
             print(f"Auto-exit scheduled in {self._auto_exit_seconds} seconds")
             QTimer.singleShot(int(self._auto_exit_seconds * 1000), QApplication.quit)
+
+    def _load_pending_file(self) -> None:
+        """Load the file specified on the command line.
+
+        Note: This is called AFTER session restoration (if enabled), so the file
+        opens IN ADDITION to any windows restored from the session. To open only
+        the command line file, use --session-mode -1 or --session-mode 0.
+        """
+        if not self._pending_file:
+            return
+        file_path = self._pending_file
+        self._pending_file = None  # Clear after use
+
+        subwindow = SeismicSubWindow(self)
+        if subwindow.load_file(file_path):
+            self.add_subwindow(subwindow)
+        else:
+            subwindow.deleteLater()
 
     def _take_screenshot(self) -> None:
         """Take a screenshot of the main window and save it."""
@@ -212,20 +250,28 @@ def parse_arguments() -> argparse.Namespace:
 
     epilog_text = """
 Examples:
-  %(prog)s                                    # Normal startup (session-mode 1)
-  %(prog)s --session-mode -1                  # No session read/write (like old --no-session)
+  %(prog)s                                    # Normal startup, restore session
+  %(prog)s data.segy                          # Restore session + open file (adds to session)
+  %(prog)s --session-mode -1 data.segy        # Open ONLY this file (no session)
+  %(prog)s --session-mode 0 data.segy         # Open file, save as new session on exit
+  %(prog)s --session-mode -1                  # Fresh start, no session read/write
   %(prog)s --session-mode 0                   # Fresh start, save new session on exit
   %(prog)s --auto-exit 3                      # Exit automatically after 3 seconds (testing)
-  %(prog)s --test-mode --session-mode -1      # Test mode without session state
   %(prog)s --auto-exit 2 --session-mode -1    # Quick startup test
 
+Session and FILE interaction:
+  By default (--session-mode 1), the FILE argument opens IN ADDITION to any
+  windows restored from the previous session. To open ONLY the specified file:
+    %(prog)s --session-mode -1 file.rd3       # No session, just this file
+    %(prog)s --session-mode 0 file.rd3        # No session, save on exit
+
 Notes:
-  --auto-exit is useful for automated testing to verify the application starts correctly
+  FILE: Seismic file to open (SEGY: .sgy/.segy, MALA: .rd3/.rd7)
   --session-mode controls session behavior:
     -1: Don't load or save session (no read/write)
      0: Start fresh, save new session on exit (write only)
      1: Normal mode - load and save session (default)
-  --test-mode is reserved for future testing optimizations
+  --auto-exit is useful for automated testing to verify the application starts correctly
 """
 
     parser = argparse.ArgumentParser(
@@ -267,6 +313,14 @@ Notes:
         "--print-session",
         action="store_true",
         help="Print the session file path and contents, then exit",
+    )
+
+    parser.add_argument(
+        "file",
+        nargs="?",
+        metavar="FILE",
+        help="Seismic file to open (SEGY, rd3, or rd7). Opens in addition to "
+             "session windows by default; use --session-mode -1 to open only this file",
     )
 
     return parser.parse_args()
@@ -318,6 +372,12 @@ def main() -> int:
     # Store auto-exit seconds for main window (will be set up in showEvent)
     if args.auto_exit:
         SeismicMainWindow._pending_auto_exit_seconds = args.auto_exit
+
+    # Store file path for main window (will be loaded in showEvent, after session restore).
+    # The file opens IN ADDITION to session windows. Use --session-mode -1 or 0 to skip
+    # session restoration and open only the specified file.
+    if args.file:
+        SeismicMainWindow._pending_file_path = args.file
 
     return app.run(
         default_main_window_type="seismic_main",

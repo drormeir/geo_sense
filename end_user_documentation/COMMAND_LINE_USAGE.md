@@ -26,6 +26,19 @@ python seismic_app.py -h
 
 ## Command-Line Options
 
+### Opening Files
+```bash
+# Open a seismic file directly
+python seismic_app.py data.segy
+python seismic_app.py /path/to/file.rd3
+
+# Open ONLY this file (no session restore)
+python seismic_app.py --session-mode -1 data.rd3
+
+# Open file, save as new session on exit
+python seismic_app.py --session-mode 0 data.segy
+```
+
 ### Normal Usage
 ```bash
 # Start normally (loads and saves session)
@@ -62,6 +75,7 @@ python seismic_app.py --test-mode
 
 | Option | Short | Description |
 |--------|-------|-------------|
+| `FILE` | - | Seismic file to open (SEGY .sgy/.segy, MALA .rd3/.rd7). Opens in addition to session windows by default. |
 | `--help` | `-h` | Show help message and exit |
 | `--test-mode` | - | Run in test mode (minimal GUI) |
 | `--auto-exit SECONDS` | - | Exit automatically after N seconds |
@@ -106,7 +120,61 @@ python seismic_app.py --session-mode 1
 
 ---
 
+## Opening Files from Command Line
+
+You can open a seismic file directly by passing it as an argument:
+
+```bash
+python seismic_app.py mydata.segy
+python seismic_app.py /path/to/survey.rd3
+```
+
+### Supported File Formats
+- **SEGY files**: `.sgy`, `.segy`
+- **MALA GPR files**: `.rd3`, `.rd7` (requires companion `.rad` header file)
+
+### How FILE Interacts with Sessions
+
+By default (session-mode 1), the FILE argument opens **in addition to** any windows restored from the previous session:
+
+```bash
+# If session has 2 windows, this results in 3 windows (2 from session + 1 file)
+python seismic_app.py data.rd3
+```
+
+To open **only** the specified file without restoring session windows:
+
+```bash
+# Open only this file, no session read/write
+python seismic_app.py --session-mode -1 data.rd3
+
+# Open only this file, save session on exit
+python seismic_app.py --session-mode 0 data.rd3
+```
+
+### Summary Table
+
+| Command | Session Windows | File Window | Save on Exit |
+|---------|-----------------|-------------|--------------|
+| `seismic_app.py file.rd3` | Restored | Yes | Yes |
+| `seismic_app.py --session-mode 0 file.rd3` | No | Yes | Yes |
+| `seismic_app.py --session-mode -1 file.rd3` | No | Yes | No |
+
+---
+
 ## Examples
+
+### Opening Files
+```bash
+# Open a SEGY file (adds to any existing session windows)
+python seismic_app.py survey_data.segy
+
+# Open a MALA GPR file without session (clean start)
+python seismic_app.py --session-mode -1 GPR_line01.rd3
+
+# Open file and save as new session on exit
+python seismic_app.py --session-mode 0 /path/to/data.rd7
+```
 
 ### Development
 ```bash
@@ -191,6 +259,12 @@ python seismic_app.py --help
 ```
 # Show help (works everywhere)
 python seismic_app.py -h
+
+# Open a file directly (adds to session windows)
+python seismic_app.py data.rd3
+
+# Open ONLY this file (no session)
+python seismic_app.py --session-mode -1 data.rd3
 
 # Normal start (default: load and save session)
 python seismic_app.py
