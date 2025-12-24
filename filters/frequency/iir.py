@@ -36,11 +36,11 @@ class IIRFilter(BaseFilter):
             display_name="Low Cutoff",
             param_type=ParameterType.FLOAT,
             default=10.0,
-            min_value=0.1,
-            max_value=10000.0,
-            step=1.0,
-            decimals=1,
-            units="Hz",
+            min_value=1,
+            max_value=10000,
+            step=10,
+            decimals=0,
+            units="MHz",
             tooltip="Low cutoff frequency (-3dB point)"
         ),
         FilterParameterSpec(
@@ -48,11 +48,11 @@ class IIRFilter(BaseFilter):
             display_name="High Cutoff",
             param_type=ParameterType.FLOAT,
             default=100.0,
-            min_value=0.1,
-            max_value=10000.0,
-            step=1.0,
-            decimals=1,
-            units="Hz",
+            min_value=1,
+            max_value=10000,
+            step=10,
+            decimals=0,
+            units="MHz",
             tooltip="High cutoff frequency (-3dB point)"
         ),
         FilterParameterSpec(
@@ -107,8 +107,20 @@ class IIRFilter(BaseFilter):
         ),
     ]
 
-    def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:
+    def reset_defaults_from_data(self, data_info: dict[str, any]) -> None:
+        """Reset filter parameters to sensible defaults based on data characteristics."""
+
+        self._antenna_frequencies_hz = data_info['antenna_frequencies_hz']
+        if self._antenna_frequencies_hz:
+            self.set_parameter("low_freq", self._antenna_frequencies_hz[0]*0.5 / 1_000_000.0)
+            self.set_parameter("high_freq", self._antenna_frequencies_hz[-1]*5.0 / 1_000_000.0)
+
+
+    def apply(self, data: np.ndarray|None, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
         """Apply IIR filter to seismic data."""
+        if data is None or data.size == 0:
+            return data, shape_interval
+
         low_freq = self.get_parameter("low_freq")
         high_freq = self.get_parameter("high_freq")
         order = self.get_parameter("order")
@@ -118,6 +130,7 @@ class IIRFilter(BaseFilter):
         stopband_db = self.get_parameter("stopband_db")
 
         # Calculate Nyquist frequency
+        sample_interval = shape_interval[0]
         fs = 1.0 / sample_interval
         nyquist = fs / 2.0
 
@@ -162,7 +175,7 @@ class IIRFilter(BaseFilter):
         for i in range(data.shape[1]):
             result[:, i] = sosfiltfilt(sos, data[:, i])
 
-        return result
+        return result, shape_interval
 
     @classmethod
     def demo(cls) -> None:
@@ -208,9 +221,9 @@ class IIRFilter(BaseFilter):
         filtered_results = {}
         for design in designs:
             filt = cls(low_freq=low_freq, high_freq=high_freq, order=order, design=design)
-            impulse_response = filt.apply(impulse, sample_interval)
+            impulse_response, _ = filt.apply(impulse, (sample_interval,1.0))
             responses[design] = np.abs(fft(impulse_response[:, 0]))
-            filtered_results[design] = filt.apply(data, sample_interval)
+            filtered_results[design], _ = filt.apply(data, (sample_interval,1.0))
 
         # Build line specs for each plot
         filtered_lines = [
