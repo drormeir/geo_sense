@@ -251,7 +251,7 @@ class OrmsbyFilter(BaseFilter):
 
         # === Apply Ormsby filter with cos2 taper (default) ===
         ormsby = cls()
-        filtered_data = ormsby.apply(data, sample_interval)
+        filtered_data, _ = ormsby.apply(data, (sample_interval, 1))
 
         # === Compute spectra ===
         original_spectrum = np.abs(fft(data[:, 0]))
