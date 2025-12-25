@@ -92,7 +92,8 @@ class DCRemovalFilter(BaseFilter):
             background = np.empty_like(data[:, 0])
             for trace_idx in range(nx):
                 trace = data[:, trace_idx]
-                background[:] = np.array([np.mean(trace[start:stop]) for start,stop in zip(start_range, stop_range)])
+                cumsum = np.concatenate(([0], np.cumsum(trace)))
+                background[:] = np.array([(cumsum[stop] - cumsum[start]) / (stop - start) for start,stop in zip(start_range, stop_range)])
                 result[:, trace_idx] -= background
 
             return result, shape_interval

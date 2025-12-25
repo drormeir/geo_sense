@@ -89,12 +89,12 @@ class BGRFilter(BaseFilter):
         else:
             # use center traces
             half_window = (num_traces | 1) // 2
-
+            trace_range = np.arange(nx)
+            start_range = np.maximum(0, trace_range - half_window)
+            stop_range = np.minimum(nx, trace_range + half_window + 1)
             for trace_idx in range(nx):
                 # Select traces for background computation
-                start = max(0, trace_idx - half_window)
-                stop = min(nx, trace_idx + half_window + 1)
-                selected_data = data[:, start:stop]
+                selected_data = data[:, start_range[trace_idx]:stop_range[trace_idx]]
 
                 # Compute background trace
                 background = BGRFilter._calculate_background(selected_data, method)
