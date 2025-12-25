@@ -37,9 +37,9 @@ class DewowFilter(BaseFilter):
             display_name="Window Length",
             param_type=ParameterType.FLOAT,
             default=20.0,
-            min_value=1.0,
+            min_value=0.001,
             max_value=500.0,
-            step=1.0,
+            step=0.1,
             decimals=1,
             units="ns",
             tooltip="Running mean window length in nanoseconds"
@@ -54,45 +54,45 @@ class DewowFilter(BaseFilter):
         ),
     ]
 
-    def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:
+
+    def apply(self, data: np.ndarray|None, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
         """Apply dewow filter to GPR data."""
+        if data is None or data.size == 0:
+            return data, shape_interval
+
         window_ns = self.get_parameter("window_ns")
         method = self.get_parameter("method")
 
         # Convert window from ns to samples
         # sample_interval is in seconds, window_ns is in nanoseconds
-        sample_interval_ns = sample_interval * 1e9
+        sample_interval_ns = shape_interval[0] * 1e9
         window_samples = int(window_ns / sample_interval_ns)
-        window_samples = max(3, window_samples)
-        # Ensure odd window for symmetry
-        if window_samples % 2 == 0:
-            window_samples += 1
+        window_samples = max(3, window_samples) | 1 # Ensure odd window for symmetry
 
         nt, nx = data.shape
-        result = np.zeros_like(data)
+        result = np.copy(data)
         half_window = window_samples // 2
 
+        nt_range = np.arange(nt)
+        start_range = np.maximum(0, nt_range - half_window)
+        stop_range = np.minimum(nt, nt_range + half_window + 1)
+
+        background = np.empty_like(data[:, 0])
         for trace_idx in range(nx):
             trace = data[:, trace_idx]
 
             if method == "median":
                 # Running median (more robust but slower)
-                for i in range(nt):
-                    start = max(0, i - half_window)
-                    end = min(nt, i + half_window + 1)
-                    result[i, trace_idx] = trace[i] - np.median(trace[start:end])
+                background[:] = np.array([np.median(trace[start:stop]) for start,stop in zip(start_range, stop_range)])
             else:
                 # Running mean - use cumsum for efficiency
-                cumsum = np.zeros(nt + 1)
-                cumsum[1:] = np.cumsum(trace)
+                cumsum = np.concatenate(([0], np.cumsum(trace)))
+                background[:] = np.array([(cumsum[stop] - cumsum[start]) / (stop - start) for start,stop in zip(start_range, stop_range)])
 
-                for i in range(nt):
-                    start = max(0, i - half_window)
-                    end = min(nt, i + half_window + 1)
-                    window_mean = (cumsum[end] - cumsum[start]) / (end - start)
-                    result[i, trace_idx] = trace[i] - window_mean
+            result[:, trace_idx] -= background
 
-        return result
+        return result, shape_interval
+
 
     @classmethod
     def demo(cls) -> None:
@@ -131,7 +131,7 @@ class DewowFilter(BaseFilter):
 
         # === Apply dewow filter ===
         dewow = cls(window_ns=20.0)
-        filtered_data = dewow.apply(data, sample_interval)
+        filtered_data, _ = dewow.apply(data, (sample_interval, 1))
         window_ns = dewow.get_parameter('window_ns')
 
         subplots = [

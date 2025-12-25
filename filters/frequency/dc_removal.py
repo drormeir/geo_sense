@@ -59,12 +59,12 @@ class DCRemovalFilter(BaseFilter):
         self.set_parameter("window_ns", int(antenna_sample_interval_ns))
 
 
-    def apply(self, data: np.ndarray, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
+    def apply(self, data: np.ndarray|None, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
         """Apply DC removal to seismic data."""
         if data is None or data.size == 0:
             return data, shape_interval
 
-        sample_interval = shape_interval[0]
+        sample_interval_ns = shape_interval[0] * 1e9
         method = self.get_parameter("method")
 
         if method == "trace":
@@ -77,23 +77,26 @@ class DCRemovalFilter(BaseFilter):
 
         else:  # sliding
             # Remove running mean (highpass-like effect)
-            window_ms = self.get_parameter("window_ms")
-            window_samples = int(window_ms / (sample_interval * 1000))
-            window_samples = max(3, window_samples)
-
-            result = np.zeros_like(data)
-            nt, nx = data.shape
+            window_ns = self.get_parameter("window_ns")
+            window_samples = int(window_ns / sample_interval_ns)
+            window_samples = max(3, window_samples) | 1
             half_window = window_samples // 2
 
+            result = np.copy(data)
+            nt, nx = data.shape
+
+            nt_range = np.arange(nt)
+            start_range = np.maximum(0, nt_range - half_window)
+            stop_range = np.minimum(nt, nt_range + half_window + 1)
+
+            background = np.empty_like(data[:, 0])
             for trace_idx in range(nx):
                 trace = data[:, trace_idx]
-                for i in range(nt):
-                    start = max(0, i - half_window)
-                    end = min(nt, i + half_window + 1)
-                    local_mean = np.mean(trace[start:end])
-                    result[i, trace_idx] = trace[i] - local_mean
+                background[:] = np.array([np.mean(trace[start:stop]) for start,stop in zip(start_range, stop_range)])
+                result[:, trace_idx] -= background
 
             return result, shape_interval
+
 
     @classmethod
     def demo(cls) -> None:
