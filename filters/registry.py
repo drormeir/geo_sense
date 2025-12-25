@@ -26,6 +26,11 @@ class FilterRegistry:
     # Preferred category order (categories not in this list appear at end, sorted)
     CATEGORY_ORDER = ["Frequency", "Spatial", "Amplitude"]
 
+    # Preferred filter order within categories (filters not in list appear at end, sorted)
+    FILTER_ORDER: dict[str, list[str]] = {
+        "Amplitude": ["SEC Gain", "AGC"],  # SEC before AGC (physics-based before data-driven)
+    }
+
     def __init__(self) -> None:
         # Structure for UI: {category: {filter_name: filter_class}}
         self._by_category: dict[str, dict[str, Type[BaseFilter]]] = {}
@@ -80,8 +85,16 @@ class FilterRegistry:
         return sorted(categories, key=sort_key)
 
     def get_filter_names(self, category: str) -> list[str]:
-        """Get filter names for a category (sorted)."""
-        return sorted(self._by_category.get(category, {}).keys())
+        """Get filter names for a category in preferred order."""
+        names = list(self._by_category.get(category, {}).keys())
+        order = self.FILTER_ORDER.get(category, [])
+
+        def sort_key(name: str) -> tuple[int, str]:
+            if name in order:
+                return (order.index(name), name)
+            return (len(order), name)
+
+        return sorted(names, key=sort_key)
 
     def get_all_filter_names(self) -> list[str]:
         """Get all registered filter names (sorted)."""

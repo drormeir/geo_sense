@@ -447,6 +447,7 @@ class SeismicSubWindow(UASSubWindow):
         self._time_axis_values_display: np.ndarray | None = None
         self._time_display_units: str = "s"
         self._time_display_value_factor: float = 1.0 # for display time in nano seconds, milliseconds, seconds
+        self._time_second_arrival_seconds: float = 0.0
         self._depth_converted_meters: np.ndarray | None = None
         self._depth_converted_display: np.ndarray | None = None
         self._horizontal_indices_in_data_region: np.ndarray | None = None
@@ -1831,7 +1832,7 @@ class SeismicSubWindow(UASSubWindow):
         v_min_n = int(vmin/v_delta)
         v_max_n = int(vmax/v_delta)
         v_ticks = np.arange(v_min_n, v_max_n+1) * v_delta
-        v_eps = v_delta * 0.1
+        v_eps = v_delta * 0.2
         remove_low_ticks = v_ticks < self._amplitude_min + v_eps
         remove_high_ticks = v_ticks > self._amplitude_max - v_eps
         remove_ticks = remove_low_ticks | remove_high_ticks
@@ -1969,8 +1970,9 @@ class SeismicSubWindow(UASSubWindow):
         # Uses air velocity for propagation before first arrival
         # above ground depth is calculated using air velocity assuming one way travel time
         num_samples_1st_arrival = np.sum(self._time_axis_values_seconds < 0)
-        time_axis_values_2nd_arrival = self._time_axis_values_seconds - offset_meters / ground_velocity_m_per_s  # 2nd arrival corrected time axis values
+        time_axis_values_2nd_arrival = self._time_axis_values_seconds + offset_meters/air_velocity_m_per_s - offset_meters / ground_velocity_m_per_s  # 2nd arrival corrected time axis values
         num_samples_2nd_arrival = num_samples_1st_arrival + np.sum(time_axis_values_2nd_arrival[num_samples_1st_arrival:] < 0.0)
+        self._second_arrival_time_seconds = time_axis_values_2nd_arrival[num_samples_2nd_arrival] + num_samples_2nd_arrival * self.time_interval_seconds
         self._depth_converted_meters[:num_samples_1st_arrival] = time_axis_values_2nd_arrival[:num_samples_1st_arrival] * air_velocity_m_per_s
         self._depth_converted_meters[num_samples_1st_arrival:num_samples_2nd_arrival] = time_axis_values_2nd_arrival[num_samples_1st_arrival:num_samples_2nd_arrival] * ground_velocity_m_per_s
         # Below surface: geometric correction for bistatic antenna configuration

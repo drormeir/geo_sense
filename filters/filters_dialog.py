@@ -91,6 +91,8 @@ class FiltersDialog(QDialog):
         self._data_info['antenna_frequencies_hz'] = self._parent.antenna_frequencies_hz
         self._data_info['raw_data_shape'] = self._parent.raw_data_shape
         self._data_info['trace_interval_meters'] = self._parent._trace_interval_meters
+        self._data_info['time_second_arrival_seconds'] = self._parent._time_second_arrival_seconds
+
 
     def _compute_all_filter_defaults(self) -> None:
         """Compute data-based defaults for all registered filter types."""

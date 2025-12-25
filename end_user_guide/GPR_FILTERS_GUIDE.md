@@ -185,12 +185,59 @@ These filters modify signal amplitude to improve visualization and interpretatio
 - AVO (Amplitude vs Offset) analysis
 - Quantitative interpretation
 
+### SEC (Spherical and Exponential Compensation)
+
+| Property | Description |
+|----------|-------------|
+| **Purpose** | Physics-based amplitude correction for geometric spreading and attenuation |
+| **How it works** | Applies deterministic gain curve based on wave propagation physics |
+| **When to use** | When you need to preserve relative amplitude relationships |
+| **Parameters** | Alpha (spherical), Beta (attenuation), T0 (start time), Max Gain |
+| **Effect** | Compensates for amplitude decay while preserving true amplitude ratios |
+
+**Gain Formula:**
+```
+Before T0:  gain = 1.0 (no amplification of direct wave)
+After T0:   gain = ((t - t0) / dt)^alpha × exp(beta × (t - t0))
+```
+
+**Parameters Explained:**
+
+| Parameter | Description | Typical Values |
+|-----------|-------------|----------------|
+| **Alpha (Spherical)** | Spherical divergence exponent | 0=none, 1=cylindrical, 2=spherical |
+| **Beta (Attenuation)** | Exponential attenuation coefficient (1/ns) | 0.0-0.1 for most GPR |
+| **T0 (Start Time)** | Time when gain starts (ground surface / second arrival) | Auto-detected from data |
+| **Max Gain** | Maximum allowed gain (clips extreme values) | 100-1000 |
+
+**SEC vs AGC Comparison:**
+
+| Aspect | SEC | AGC |
+|--------|-----|-----|
+| **Approach** | Deterministic, physics-based | Data-driven, adaptive |
+| **Preserves relative amplitudes** | Yes (if parameters correct) | No |
+| **Requires parameter tuning** | Yes (alpha, beta) | Minimal (window only) |
+| **Best for** | Quantitative analysis | Visual display |
+| **Risk** | Over/under compensation if parameters wrong | Loss of amplitude info |
+
+**When to use SEC instead of AGC:**
+- You need to preserve relative amplitude relationships
+- You're doing quantitative analysis (layer properties, material characterization)
+- You know the approximate attenuation properties of the medium
+- You want a physically meaningful correction
+
+**Alpha Guidelines:**
+| Value | Physical Meaning | Use Case |
+|-------|------------------|----------|
+| 0 | No geometric spreading | Guided waves, borehole |
+| 1 | Cylindrical spreading | 2D surveys, line sources |
+| 2 | Spherical spreading | Point sources, 3D spreading |
+
 ### Other Amplitude Filters (Not Yet Implemented)
 
 | Filter | Purpose | Description |
 |--------|---------|-------------|
 | **Gain** | Time-varying amplitude correction | Multiply by t^n or exponential function |
-| **SEC (Spherical & Exponential Compensation)** | Correct for geometric spreading | Compensates for 1/r² amplitude decay |
 | **Trace Normalization** | Equalize trace amplitudes | Scale each trace to same max/RMS |
 | **Clip** | Limit extreme amplitudes | Prevents display saturation |
 
@@ -253,12 +300,15 @@ A typical GPR processing sequence:
         ↓
 5. Bandpass Filter     → Remove out-of-band noise
         ↓
-6. AGC (optional)      → Enhance deep reflections for display
+6. Gain Correction     → Enhance deep reflections
+   ├─ SEC              → For quantitative analysis (preserves amplitudes)
+   └─ AGC              → For display only (destroys amplitude info)
 ```
 
 **Notes:**
 - Order matters! Each step assumes previous steps are complete.
 - Not all steps are always necessary - depends on data quality.
+- **SEC vs AGC:** Use SEC for quantitative analysis, AGC for display only.
 - AGC should be last and only for display, not analysis.
 
 ---
@@ -282,7 +332,8 @@ Is there low-frequency drift remaining?
     YES → Apply Highpass or Bandpass filter
 
 Are deep reflections too weak to see?
-    YES → Apply AGC (for display only)
+    ├─ Need to preserve amplitude ratios? → Apply SEC
+    └─ Display only?                      → Apply AGC
 ```
 
 ---
@@ -296,6 +347,7 @@ Are deep reflections too weak to see?
 | FIR | Frequency | Out-of-band frequencies | In-band frequencies | Cutoff, taps |
 | IIR | Frequency | Out-of-band frequencies | In-band frequencies | Cutoff, order |
 | Ormsby | Frequency | Out-of-band frequencies | In-band frequencies | F1, F2, F3, F4 |
+| SEC | Amplitude | Geometric/attenuation decay | Relative amplitudes | Alpha, Beta, T0 |
 | AGC | Amplitude | Amplitude variations | Waveform shape | Window (ms) |
 | BGR | Spatial | Horizontal features | Dipping/point features | Method, traces |
 
@@ -320,3 +372,7 @@ Are deep reflections too weak to see?
 | **Taper** | Gradual transition function |
 | **Zero-phase** | Filtering forward and backward to eliminate phase shift |
 | **Wow** | Low-frequency artifact in GPR from antenna coupling |
+| **SEC** | Spherical and Exponential Compensation - physics-based gain correction |
+| **Spherical divergence** | Energy spreading over larger area with distance (1/r²) |
+| **Attenuation** | Energy absorption by the medium (exponential decay) |
+| **Second arrival** | First ground reflection; typically used as SEC start time (T0) |
