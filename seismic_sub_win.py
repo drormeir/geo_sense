@@ -1838,10 +1838,8 @@ class SeismicSubWindow(UASSubWindow):
             v_eps = v_delta * 0.1
             remove_low_ticks = v_ticks < self._amplitude_min + v_eps
             remove_high_ticks = v_ticks > self._amplitude_max - v_eps
-            if remove_low_ticks.any():
-                v_ticks = v_ticks[~remove_low_ticks]
-            if remove_high_ticks.any():
-                v_ticks = v_ticks[~remove_high_ticks]
+            remove_ticks = remove_low_ticks | remove_high_ticks
+            v_ticks = v_ticks[~remove_ticks]
         v_ticks = np.array([np.round(self._amplitude_min, decimals=3)] + v_ticks.tolist() + [np.round(self._amplitude_max, decimals=3)])
         assert len(v_ticks) <= num_ticks*2+3, f"Number of colorbar ticks ({len(v_ticks)}) exceeds maximum allowed ({num_ticks*2+3})"
         self._colorbar.set_ticks(v_ticks)
