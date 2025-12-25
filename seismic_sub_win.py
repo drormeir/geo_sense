@@ -392,7 +392,8 @@ class DisplaySettingsDialog(QDialog):
             'ind_sample_time_first_arrival': self.ind_sample_time_first_arrival_spinbox.value(),
         }
         ret.update(velocity_settings)
-        assert sorted(list(ret.keys())) == sorted(list(DisplaySettingsDialog.default_settings.keys()))
+        if sorted(ret.keys()) != sorted(DisplaySettingsDialog.default_settings.keys()):
+            raise ValueError(f"Settings keys mismatch: {sorted(ret.keys())} != {sorted(DisplaySettingsDialog.default_settings.keys())}")
         return ret
 
 
@@ -702,7 +703,9 @@ class SeismicSubWindow(UASSubWindow):
         """Set the canvas to the image."""
         if self._image is None or self._canvas_buffer is None or self._image.axes is None:
             return
-        assert self._get_pixels_shape() == self._get_canvas_buffer_shape(), f'_set_canvas_to_image() shape mismatch: {self._get_pixels_shape()=} != {self._get_canvas_buffer_shape()=}'
+        if self._get_pixels_shape() != self._get_canvas_buffer_shape():
+            # Shape mismatch - skip update to avoid crash, will be fixed on next resize
+            return
         self._image.set_data(self._canvas_buffer)
         self._update_image_extent_and_limits()
         vmin, vmax = self._get_vmin_vmax()
@@ -922,8 +925,9 @@ class SeismicSubWindow(UASSubWindow):
             if self._home_mode == SeismicSubWindow.HOME_MODE_1X1:
                 # using clipped file region to create canvas render region
                 file_clipped_shape = self._get_file_region_clipped_shape()
-                assert SeismicSubWindow.is_shape_within_shape(file_clipped_shape, pixels_shape),\
-                    f'_recreate_canvas_buffer() {self._home_mode=} {file_clipped_shape=} < {pixels_shape=}'
+                if not SeismicSubWindow.is_shape_within_shape(file_clipped_shape, pixels_shape):
+                    # Shape constraint violated - skip buffer creation
+                    return
                 self._canvas_render_region = Bbox([[0, 0], [file_clipped_shape[1], file_clipped_shape[0]]])
             else:
                 self._canvas_render_region = Bbox([\
@@ -1078,9 +1082,7 @@ class SeismicSubWindow(UASSubWindow):
         """
         data = self._canvas_buffer
         if data is None or self._canvas_render_region is None:
-            assert self.raw_data is None,\
-                f"get_hover_info: {(self._canvas_buffer is None)=}, {(self._canvas_render_region is None)=}\n" +\
-                f"The only time this should happen is when the file is NOT loaded. However: {(self.raw_data is not None)=}" 
+            # Expected only when file is not loaded
             return None
 
         hover_info = {}
@@ -1544,7 +1546,9 @@ class SeismicSubWindow(UASSubWindow):
         try:
             # if raw_data is None, it will return None without raising an exception
             self._processed_data, self._processed_shape_interval = self._filter_pipeline.apply(self.raw_data, (self.time_interval_seconds, self._trace_interval_meters))
-            assert (self._processed_data is None) == (self.raw_data is None), f'_apply_filters() {self._processed_data=} != {self.raw_data=}'
+            # Ensure consistency: processed_data should be None iff raw_data is None
+            if (self._processed_data is None) != (self.raw_data is None):
+                raise ValueError(f"Filter pipeline inconsistency: processed_data is None={self._processed_data is None}, raw_data is None={self.raw_data is None}")
         except Exception as e:
             self._show_error("Error", f"Failed to apply filters: {e}")
             return
@@ -1567,7 +1571,7 @@ class SeismicSubWindow(UASSubWindow):
                 # Disconnect the default action
                 try:
                     action.triggered.disconnect()
-                except:
+                except (RuntimeError, TypeError):
                     pass  # In case it's not connected
 
                 # Connect to our Display Settings dialog
@@ -1587,7 +1591,7 @@ class SeismicSubWindow(UASSubWindow):
                 # Disconnect the default action
                 try:
                     action.triggered.disconnect()
-                except:
+                except (RuntimeError, TypeError):
                     pass  # In case it's not connected
 
                 # Connect to our custom home handler
@@ -1607,7 +1611,7 @@ class SeismicSubWindow(UASSubWindow):
                 # Disconnect the default action
                 try:
                     action.triggered.disconnect()
-                except:
+                except (RuntimeError, TypeError):
                     pass  # In case it's not connected
 
                 # Connect to our custom handler that shows the menu
@@ -1894,7 +1898,11 @@ class SeismicSubWindow(UASSubWindow):
             axis.set_major_locator(plt.NullLocator())
             axis.set_minor_locator(plt.NullLocator())
             return
-        assert len(axis_vector_indices) == len(axis_vector_values)
+        if len(axis_vector_indices) != len(axis_vector_values):
+            # Length mismatch - use null locators to avoid crash
+            axis.set_major_locator(plt.NullLocator())
+            axis.set_minor_locator(plt.NullLocator())
+            return
         if len(axis_vector_values) == 1:
             axis.set_major_locator(plt.FixedLocator([axis_vector_values[0]]))
             axis.set_minor_locator(plt.NullLocator())

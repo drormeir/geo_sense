@@ -246,31 +246,38 @@ class DataFile:
                 self.error = "Antenna type is not set in MALA file"
                 return False
             antenna_type = antenna_type.lower()
-            if 'ghz' in antenna_type:
-                antenna_ghz = antenna_type.split('ghz')[0].strip()
-                antenna_ghz = float(antenna_ghz)
-                self.antenna_frequencies_hz = [antenna_ghz * 1_000_000_000.0]
-            elif 'mhz' in antenna_type:
-                antenna_mhz = antenna_type.split('mhz')[0].strip()
-                antenna_mhz = float(antenna_mhz)
-                self.antenna_frequencies_hz = [antenna_mhz * 1_000_000.0]
-            elif 'khz' in antenna_type:
-                antenna_kHz = antenna_type.split('khz')[0].strip()
-                antenna_kHz = float(antenna_kHz)
-                self.antenna_frequencies_hz = [antenna_kHz * 1_000.0]
-            elif 'hz' in antenna_type:
-                antenna_Hz = antenna_type.split('hz')[0].strip()
-                antenna_Hz = float(antenna_Hz)
-                self.antenna_frequencies_hz = [antenna_Hz]
-            else:
-                # replace all non-numeric characters with spaces (keep digits, dots, e, +, -)
-                antenna_frequency_str = re.sub(r'[^0-9.e+-]', ' ', antenna_type)
-                frequency_candidates = [float(f) for f in antenna_frequency_str.split() if f.strip()]
-                if not frequency_candidates:
-                    self.error = f"Could not parse antenna frequency from: {antenna_type}"
-                    return False
-                antenna_frequency_mhz = max(frequency_candidates)
-                self.antenna_frequencies_hz = [antenna_frequency_mhz * 1_000_000.0]
+            try:
+                if 'ghz' in antenna_type:
+                    antenna_ghz = antenna_type.split('ghz')[0].strip()
+                    if not antenna_ghz:
+                        raise ValueError("Empty frequency value before 'ghz'")
+                    self.antenna_frequencies_hz = [float(antenna_ghz) * 1_000_000_000.0]
+                elif 'mhz' in antenna_type:
+                    antenna_mhz = antenna_type.split('mhz')[0].strip()
+                    if not antenna_mhz:
+                        raise ValueError("Empty frequency value before 'mhz'")
+                    self.antenna_frequencies_hz = [float(antenna_mhz) * 1_000_000.0]
+                elif 'khz' in antenna_type:
+                    antenna_kHz = antenna_type.split('khz')[0].strip()
+                    if not antenna_kHz:
+                        raise ValueError("Empty frequency value before 'khz'")
+                    self.antenna_frequencies_hz = [float(antenna_kHz) * 1_000.0]
+                elif 'hz' in antenna_type:
+                    antenna_Hz = antenna_type.split('hz')[0].strip()
+                    if not antenna_Hz:
+                        raise ValueError("Empty frequency value before 'hz'")
+                    self.antenna_frequencies_hz = [float(antenna_Hz)]
+                else:
+                    # replace all non-numeric characters with spaces (keep digits, dots, e, +, -)
+                    antenna_frequency_str = re.sub(r'[^0-9.e+-]', ' ', antenna_type)
+                    frequency_candidates = [float(f) for f in antenna_frequency_str.split() if f.strip()]
+                    if not frequency_candidates:
+                        raise ValueError(f"No numeric frequency found in: {antenna_type}")
+                    antenna_frequency_mhz = max(frequency_candidates)
+                    self.antenna_frequencies_hz = [antenna_frequency_mhz * 1_000_000.0]
+            except ValueError as e:
+                self.error = f"Could not parse antenna frequency from '{antenna_type}': {e}"
+                return False
 
             # read distance interval units from MALA header and convert to MKS
             distance_interval_units = self.info.get('LENGTH UNITS', 'm')

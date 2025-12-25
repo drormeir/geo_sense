@@ -4,6 +4,8 @@ IIR (Infinite Impulse Response) filter for seismic/GPR data.
 Supports multiple filter designs: Butterworth, Bessel, Chebyshev, Elliptic.
 """
 
+from typing import Any
+
 import numpy as np
 from scipy.signal import butter, bessel, cheby1, cheby2, ellip, sosfiltfilt
 
@@ -107,7 +109,7 @@ class IIRFilter(BaseFilter):
         ),
     ]
 
-    def reset_defaults_from_data(self, data_info: dict[str, any]) -> None:
+    def reset_defaults_from_data(self, data_info: dict[str, Any]) -> None:
         """Reset filter parameters to sensible defaults based on data characteristics."""
 
         self._antenna_frequencies_hz = data_info['antenna_frequencies_hz']

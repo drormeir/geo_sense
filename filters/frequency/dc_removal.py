@@ -5,6 +5,8 @@ Removes the DC offset (zero-frequency component) from traces
 to center the data around zero amplitude.
 """
 
+from typing import Any
+
 import numpy as np
 
 from ..base import BaseFilter, FilterParameterSpec, ParameterType
@@ -51,12 +53,12 @@ class DCRemovalFilter(BaseFilter):
     ]
 
 
-    def reset_defaults_from_data(self, data_info: dict[str, any]) -> None:
+    def reset_defaults_from_data(self, data_info: dict[str, Any]) -> None:
         """Reset filter parameters to sensible defaults based on data characteristics."""
-
         self._antenna_frequencies_hz = data_info['antenna_frequencies_hz']
-        antenna_sample_interval_ns = 1_000_000_000.0 / self._antenna_frequencies_hz[0]
-        self.set_parameter("window_ns", int(antenna_sample_interval_ns))
+        if self._antenna_frequencies_hz:
+            antenna_sample_interval_ns = 1_000_000_000.0 / self._antenna_frequencies_hz[0]
+            self.set_parameter("window_ns", int(antenna_sample_interval_ns))
 
 
     def apply(self, data: np.ndarray|None, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
@@ -104,22 +106,21 @@ class DCRemovalFilter(BaseFilter):
         """
         Visual demonstration of the DC Removal filter.
 
-        Creates synthetic data with DC offset and shows before/after comparison.
+        Creates synthetic GPR-like data with DC offset and shows before/after comparison.
         """
-        # === Create synthetic data ===
-        sample_interval = 0.001  # 1 ms (1000 Hz sampling rate)
-        duration = 0.5  # 500 ms
-        n_samples = int(duration / sample_interval)
-        t = np.arange(n_samples) * sample_interval
-        t_ms = t * 1000
+        # === Create synthetic GPR-like data ===
+        sample_interval_ns = 0.1  # 0.1 ns (10 GHz sampling - typical for GPR)
+        duration_ns = 100  # 100 ns time window
+        n_samples = int(duration_ns / sample_interval_ns)
+        t_ns = np.arange(n_samples) * sample_interval_ns
 
         # Create signal with:
-        # - A sine wave (actual signal)
-        # - A DC offset that varies (baseline drift)
+        # - A high-frequency signal (GPR reflections)
+        # - A DC offset
         # - Some low-frequency drift
-        signal_component = 1.0 * np.sin(2 * np.pi * 25 * t)
+        signal_component = 1.0 * np.sin(2 * np.pi * 0.1 * t_ns)  # ~100 MHz equivalent
         dc_offset = 2.0  # Constant DC offset
-        drift = 0.5 * np.sin(2 * np.pi * 2 * t)  # Slow drift (2 Hz)
+        drift = 0.5 * np.sin(2 * np.pi * 0.01 * t_ns)  # Slow drift
 
         signal = signal_component + dc_offset + drift
 
@@ -127,11 +128,12 @@ class DCRemovalFilter(BaseFilter):
         data = signal.reshape(-1, 1).astype(np.float32)
 
         # === Apply DC removal with different methods ===
+        sample_interval_sec = sample_interval_ns * 1e-9
         dc_trace = cls(method="trace")
-        dc_sliding = cls(method="sliding", window_ms=100.0)
+        dc_sliding = cls(method="sliding", window_ns=20.0)  # 20 ns sliding window
 
-        filtered_trace, _ = dc_trace.apply(data, (sample_interval,1.0))
-        filtered_sliding, _ = dc_sliding.apply(data, (sample_interval,1.0))
+        filtered_trace, _ = dc_trace.apply(data, (sample_interval_sec, 1.0))
+        filtered_sliding, _ = dc_sliding.apply(data, (sample_interval_sec, 1.0))
 
         mean_after = np.mean(filtered_trace[:, 0])
 
@@ -139,52 +141,52 @@ class DCRemovalFilter(BaseFilter):
             # Top-left: Original signal
             {
                 'lines': [
-                    {'x': t_ms, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8},
+                    {'x': t_ns, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8},
                 ],
                 'axhlines': [
                     {'y': 0, 'color': 'k', 'linestyle': '-', 'alpha': 0.3},
                     {'y': dc_offset, 'color': 'r', 'linestyle': '--', 'alpha': 0.7},
                 ],
                 'title': "Original Signal (with DC offset + drift)",
-                'xlabel': "Time (ms)",
+                'xlabel': "Time (ns)",
                 'ylabel': "Amplitude",
                 'grid': True,
             },
             # Top-right: After trace-mean removal
             {
                 'lines': [
-                    {'x': t_ms, 'y': filtered_trace[:, 0], 'color': 'g', 'linewidth': 0.8},
+                    {'x': t_ns, 'y': filtered_trace[:, 0], 'color': 'g', 'linewidth': 0.8},
                 ],
                 'axhlines': [{'y': 0, 'color': 'k', 'linestyle': '-', 'alpha': 0.3}],
                 'title': f"After DC Removal (method='trace', mean={mean_after:.4f})",
-                'xlabel': "Time (ms)",
+                'xlabel': "Time (ns)",
                 'ylabel': "Amplitude",
                 'grid': True,
             },
             # Bottom-left: After sliding window removal
             {
                 'lines': [
-                    {'x': t_ms, 'y': filtered_sliding[:, 0], 'color': 'm', 'linewidth': 0.8},
+                    {'x': t_ns, 'y': filtered_sliding[:, 0], 'color': 'm', 'linewidth': 0.8},
                 ],
                 'axhlines': [{'y': 0, 'color': 'k', 'linestyle': '-', 'alpha': 0.3}],
-                'title': "After DC Removal (method='sliding', window=100ms)",
-                'xlabel': "Time (ms)",
+                'title': "After DC Removal (method='sliding', window=20ns)",
+                'xlabel': "Time (ns)",
                 'ylabel': "Amplitude",
                 'grid': True,
             },
             # Bottom-right: Comparison of all three
             {
                 'lines': [
-                    {'x': t_ms, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8,
+                    {'x': t_ns, 'y': data[:, 0], 'color': 'b', 'linewidth': 0.8,
                      'alpha': 0.5, 'label': "Original"},
-                    {'x': t_ms, 'y': filtered_trace[:, 0], 'color': 'g', 'linewidth': 0.8,
+                    {'x': t_ns, 'y': filtered_trace[:, 0], 'color': 'g', 'linewidth': 0.8,
                      'label': "Trace mean"},
-                    {'x': t_ms, 'y': filtered_sliding[:, 0], 'color': 'm', 'linewidth': 0.8,
-                     'label': "Sliding (100ms)"},
+                    {'x': t_ns, 'y': filtered_sliding[:, 0], 'color': 'm', 'linewidth': 0.8,
+                     'label': "Sliding (20ns)"},
                 ],
                 'axhlines': [{'y': 0, 'color': 'k', 'linestyle': '-', 'alpha': 0.3}],
                 'title': "Comparison",
-                'xlabel': "Time (ms)",
+                'xlabel': "Time (ns)",
                 'ylabel': "Amplitude",
                 'legend': True,
                 'grid': True,
