@@ -37,30 +37,43 @@ class DCRemovalFilter(BaseFilter):
             tooltip="trace: remove mean per trace; global: remove overall mean; sliding: remove running mean"
         ),
         FilterParameterSpec(
-            name="window_ms",
-            display_name="Window Length",
+            name="window_ns",
+            display_name="Sample window size (ns)",
             param_type=ParameterType.FLOAT,
-            default=100.0,
-            min_value=10.0,
-            max_value=5000.0,
-            step=10.0,
-            decimals=0,
-            units="ms",
+            default=1.0,
+            min_value=0.001,
+            max_value=100.0,
+            step=0.1,
+            decimals=3,
+            units="ns",
             tooltip="Window length for sliding method (ignored for trace/global methods)"
         ),
     ]
 
-    def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:
+
+    def reset_defaults_from_data(self, data_info: dict[str, any]) -> None:
+        """Reset filter parameters to sensible defaults based on data characteristics."""
+
+        self._antenna_frequencies_hz = data_info['antenna_frequencies_hz']
+        antenna_sample_interval_ns = 1_000_000_000.0 / self._antenna_frequencies_hz[0]
+        self.set_parameter("window_ns", int(antenna_sample_interval_ns))
+
+
+    def apply(self, data: np.ndarray, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
         """Apply DC removal to seismic data."""
+        if data is None or data.size == 0:
+            return data, shape_interval
+
+        sample_interval = shape_interval[0]
         method = self.get_parameter("method")
 
         if method == "trace":
             # Remove mean from each trace independently
-            return data - np.mean(data, axis=0, keepdims=True)
+            return data - np.mean(data, axis=0, keepdims=True), shape_interval
 
         elif method == "global":
             # Remove overall mean from entire dataset
-            return data - np.mean(data)
+            return data - np.mean(data), shape_interval
 
         else:  # sliding
             # Remove running mean (highpass-like effect)
@@ -80,7 +93,7 @@ class DCRemovalFilter(BaseFilter):
                     local_mean = np.mean(trace[start:end])
                     result[i, trace_idx] = trace[i] - local_mean
 
-            return result
+            return result, shape_interval
 
     @classmethod
     def demo(cls) -> None:
@@ -113,8 +126,8 @@ class DCRemovalFilter(BaseFilter):
         dc_trace = cls(method="trace")
         dc_sliding = cls(method="sliding", window_ms=100.0)
 
-        filtered_trace = dc_trace.apply(data, sample_interval)
-        filtered_sliding = dc_sliding.apply(data, sample_interval)
+        filtered_trace, _ = dc_trace.apply(data, (sample_interval,1.0))
+        filtered_sliding, _ = dc_sliding.apply(data, (sample_interval,1.0))
 
         mean_after = np.mean(filtered_trace[:, 0])
 
