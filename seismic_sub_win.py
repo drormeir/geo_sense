@@ -1822,7 +1822,7 @@ class SeismicSubWindow(UASSubWindow):
             return
         vmin, vmax = self._get_vmin_vmax()
         v_abs_max = max(abs(vmax), abs(vmin))
-        if v_abs_max <= 1e-9*v_abs_max:
+        if abs(vmax - vmin) <= 1e-9*v_abs_max:
             self._colorbar.set_ticks([np.round((vmin+vmax)/2.0, decimals=3)])
             return
         num_ticks = 10
@@ -1831,17 +1831,12 @@ class SeismicSubWindow(UASSubWindow):
         v_min_n = int(vmin/v_delta)
         v_max_n = int(vmax/v_delta)
         v_ticks = np.arange(v_min_n, v_max_n+1) * v_delta
-        if len(v_ticks) < 2:
-            print(f"Warning: Only {len(v_ticks)} ticks found for colorbar, using default ticks. {vmin=} {vmax=} {v_delta=} {v_min_n=} {v_max_n=}")
-            v_ticks = np.array([])
-        else:
-            v_eps = v_delta * 0.1
-            remove_low_ticks = v_ticks < self._amplitude_min + v_eps
-            remove_high_ticks = v_ticks > self._amplitude_max - v_eps
-            remove_ticks = remove_low_ticks | remove_high_ticks
-            v_ticks = v_ticks[~remove_ticks]
+        v_eps = v_delta * 0.1
+        remove_low_ticks = v_ticks < self._amplitude_min + v_eps
+        remove_high_ticks = v_ticks > self._amplitude_max - v_eps
+        remove_ticks = remove_low_ticks | remove_high_ticks
+        v_ticks = v_ticks[~remove_ticks]
         v_ticks = np.array([np.round(self._amplitude_min, decimals=3)] + v_ticks.tolist() + [np.round(self._amplitude_max, decimals=3)])
-        assert len(v_ticks) <= num_ticks*2+3, f"Number of colorbar ticks ({len(v_ticks)}) exceeds maximum allowed ({num_ticks*2+3})"
         self._colorbar.set_ticks(v_ticks)
 
 
