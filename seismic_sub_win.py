@@ -678,7 +678,7 @@ class SeismicSubWindow(UASSubWindow):
 
     def _update_image_extent_and_limits(self) -> None:
         """Set image extent, limits, and aspect based on home mode."""
-        if self._image is None or self._canvas_buffer is None:
+        if self._image is None or self._canvas_buffer is None or self._image.axes is None:
             return
         # Extent covers full buffer (what imshow displays)
         h, w = self._canvas_buffer.shape
@@ -699,7 +699,7 @@ class SeismicSubWindow(UASSubWindow):
 
     def _set_canvas_to_image(self) -> None:
         """Set the canvas to the image."""
-        if self._image is None or self._canvas_buffer is None:
+        if self._image is None or self._canvas_buffer is None or self._image.axes is None:
             return
         assert self._get_pixels_shape() == self._get_canvas_buffer_shape(), f'_set_canvas_to_image() shape mismatch: {self._get_pixels_shape()=} != {self._get_canvas_buffer_shape()=}'
         self._image.set_data(self._canvas_buffer)

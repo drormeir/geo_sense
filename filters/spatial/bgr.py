@@ -59,42 +59,50 @@ class BGRFilter(BaseFilter):
             display_name="Trace Selection",
             param_type=ParameterType.CHOICE,
             default="all",
-            choices=["all", "first", "last", "center"],
+            choices=["all", "center"],
             tooltip="Which traces to use when num_traces > 0"
         ),
     ]
 
-    def apply(self, data: np.ndarray, sample_interval: float) -> np.ndarray:
+    @staticmethod
+    def _calculate_background(data: np.ndarray, method: str) -> np.ndarray:
+        if method == "median":
+            return np.median(data, axis=1, keepdims=True)
+        else:  # mean
+            return np.mean(data, axis=1, keepdims=True)
+
+
+    def apply(self, data: np.ndarray, shape_interval: tuple[float,float]) -> tuple[np.ndarray|None, tuple[float,float]]:
         """Apply background removal to data."""
         method = self.get_parameter("method")
         num_traces = self.get_parameter("num_traces")
         trace_selection = self.get_parameter("trace_selection")
 
-        nt, nx = data.shape
+        nx = data.shape[1]
 
-        # Select traces for background computation
-        if num_traces <= 0 or num_traces >= nx or trace_selection == "all":
-            # Use all traces
-            selected_data = data
+        result = np.copy(data)
+        if num_traces <= 0 or trace_selection == "all":
+            # use all traces
+            # Compute background trace
+            background = BGRFilter._calculate_background(data, method)
+            result -= background
         else:
-            if trace_selection == "first":
-                selected_data = data[:, :num_traces]
-            elif trace_selection == "last":
-                selected_data = data[:, -num_traces:]
-            else:  # center
-                start = (nx - num_traces) // 2
-                selected_data = data[:, start:start + num_traces]
+            # use center traces
+            half_window = (num_traces | 1) // 2
 
-        # Compute background trace
-        if method == "median":
-            background = np.median(selected_data, axis=1)
-        else:  # mean
-            background = np.mean(selected_data, axis=1)
+            for trace_idx in range(nx):
+                # Select traces for background computation
+                start = max(0, trace_idx - half_window)
+                stop = min(nx, trace_idx + half_window + 1)
+                selected_data = data[:, start:stop]
 
-        # Subtract background from all traces
-        result = data - background[:, np.newaxis]
+                # Compute background trace
+                background = BGRFilter._calculate_background(selected_data, method)
 
-        return result
+                result[:, trace_idx] -= background
+
+        return result, shape_interval
+
 
     @classmethod
     def demo(cls) -> None:
@@ -150,7 +158,7 @@ class BGRFilter(BaseFilter):
 
         # === Apply BGR filter ===
         bgr = cls(method="mean", num_traces=0)
-        filtered_data = bgr.apply(data, sample_interval)
+        filtered_data, _ = bgr.apply(data, (sample_interval, 1))
 
         # === Prepare plot specifications ===
         vmax = float(np.percentile(np.abs(data), 98))
