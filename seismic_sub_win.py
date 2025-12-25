@@ -1822,8 +1822,8 @@ class SeismicSubWindow(UASSubWindow):
             return
         vmin, vmax = self._get_vmin_vmax()
         v_abs_max = max(abs(vmax), abs(vmin))
-        if abs(vmax - vmin) <= 1e-9*v_abs_max:
-            self._colorbar.set_ticks([np.round((vmin+vmax)/2.0, decimals=3)])
+        if self._amplitude_max - self._amplitude_min <= 1e-4*v_abs_max:
+            self._colorbar.set_ticks([np.round((self._amplitude_min+self._amplitude_max)/2.0, decimals=3)])
             return
         num_ticks = 10
         v_delta = v_abs_max / num_ticks
@@ -1968,14 +1968,16 @@ class SeismicSubWindow(UASSubWindow):
         # Above surface (negative time): antenna height above ground
         # Uses air velocity for propagation before first arrival
         # above ground depth is calculated using air velocity assuming one way travel time
-        time_axis_values = self._time_axis_values_seconds - offset_meters / ground_velocity_m_per_s  # 2nd arrival corrected time axis values
         num_samples_1st_arrival = np.sum(self._time_axis_values_seconds < 0)
-        num_samples_2nd_arrival = num_samples_1st_arrival + np.sum(time_axis_values[num_samples_1st_arrival:] < 0.0)
-        self._depth_converted_meters[:num_samples_1st_arrival] = time_axis_values[:num_samples_1st_arrival] * air_velocity_m_per_s
-        self._depth_converted_meters[num_samples_1st_arrival:num_samples_2nd_arrival] = time_axis_values[num_samples_1st_arrival:num_samples_2nd_arrival] * ground_velocity_m_per_s
+        time_axis_values_2nd_arrival = self._time_axis_values_seconds - offset_meters / ground_velocity_m_per_s  # 2nd arrival corrected time axis values
+        num_samples_2nd_arrival = num_samples_1st_arrival + np.sum(time_axis_values_2nd_arrival[num_samples_1st_arrival:] < 0.0)
+        self._depth_converted_meters[:num_samples_1st_arrival] = time_axis_values_2nd_arrival[:num_samples_1st_arrival] * air_velocity_m_per_s
+        self._depth_converted_meters[num_samples_1st_arrival:num_samples_2nd_arrival] = time_axis_values_2nd_arrival[num_samples_1st_arrival:num_samples_2nd_arrival] * ground_velocity_m_per_s
         # Below surface: geometric correction for bistatic antenna configuration
         # Signal travels diagonally from Tx to reflector to Rx
-        slant_distance = time_axis_values[num_samples_2nd_arrival:]*ground_velocity_m_per_s/2
+        slant_distance = time_axis_values_2nd_arrival[num_samples_2nd_arrival:]*ground_velocity_m_per_s/2
+        if slant_distance[0] < half_offset:
+            slant_distance += half_offset
         # clip to zero depth. This handles the "direct wave zone" near the surface.
         self._depth_converted_meters[num_samples_2nd_arrival:] = np.sqrt(np.maximum(slant_distance**2 - half_offset**2, 0))
 

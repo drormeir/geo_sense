@@ -283,7 +283,7 @@ class DataFile:
                 return False
             factor_length_2_mks = UnitSystem.convert_length_factor(file_unit_system, UnitSystem.MKS)
             # Convert offset to meters
-            self.offset_meters = float(self.info.get('OFFSET', 0)) * factor_length_2_mks
+            self.offset_meters = float(self.info.get('ANTENNA SEPARATION', 0)) * factor_length_2_mks
 
             # Distance interval from MALA header
             distance_interval = float(self.info.get('DISTANCE INTERVAL', 0))
